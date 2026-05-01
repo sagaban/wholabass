@@ -83,6 +83,20 @@ async fn ingest_file(
     parse_separate_response(&resp, &song_id, &out_dir)
 }
 
+#[tauri::command]
+async fn read_stem(
+    song_id: String,
+    stem: String,
+    app: AppHandle,
+) -> Result<tauri::ipc::Response, String> {
+    let library_root = library::resolve_root(&app).map_err(|e| e.to_string())?;
+    let path = library::stem_path(&library_root, &song_id, &stem).map_err(|e| e.to_string())?;
+    let bytes = tokio::fs::read(&path)
+        .await
+        .map_err(|e| format!("read {}: {e}", path.display()))?;
+    Ok(tauri::ipc::Response::new(bytes))
+}
+
 async fn take_sidecar(state: &State<'_, AppState>) -> Result<Arc<Sidecar>, String> {
     // The sidecar is spawned in a background task at startup; give it a moment
     // on first call rather than failing immediately if the user is fast.
@@ -144,7 +158,7 @@ pub fn run() {
             });
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![ping, ingest_file])
+        .invoke_handler(tauri::generate_handler![ping, ingest_file, read_stem])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

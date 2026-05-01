@@ -9,6 +9,8 @@ pub enum LibraryError {
     AppDataDir(#[from] tauri::Error),
     #[error("io error: {0}")]
     Io(#[from] std::io::Error),
+    #[error("invalid stem name: {0}")]
+    InvalidStem(String),
 }
 
 /// `<app_data_dir>/library`.
@@ -29,6 +31,16 @@ pub fn ensure_song_dir(root: &Path, id: &str) -> std::io::Result<PathBuf> {
     Ok(dir)
 }
 
+pub const STEM_NAMES: &[&str] = &["vocals", "drums", "bass", "other"];
+
+/// `<root>/<id>/stems/<name>.wav`. Returns Err if `name` isn't canonical.
+pub fn stem_path(root: &Path, id: &str, name: &str) -> Result<PathBuf, LibraryError> {
+    if !STEM_NAMES.contains(&name) {
+        return Err(LibraryError::InvalidStem(name.to_string()));
+    }
+    Ok(song_dir(root, id).join("stems").join(format!("{name}.wav")))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -37,6 +49,32 @@ mod tests {
     fn song_dir_is_root_join_id() {
         let root = Path::new("/tmp/wholabass-library");
         assert_eq!(song_dir(root, "abc123"), root.join("abc123"));
+    }
+
+    #[test]
+    fn stem_path_canonical() {
+        let root = Path::new("/lib");
+        assert_eq!(
+            stem_path(root, "abc", "bass").unwrap(),
+            root.join("abc").join("stems").join("bass.wav"),
+        );
+    }
+
+    #[test]
+    fn stem_path_rejects_unknown() {
+        let root = Path::new("/lib");
+        assert!(matches!(
+            stem_path(root, "abc", "guitar"),
+            Err(LibraryError::InvalidStem(_)),
+        ));
+    }
+
+    #[test]
+    fn stem_path_rejects_traversal() {
+        // ".." isn't in STEM_NAMES so it must be rejected, preventing path
+        // escape into ../../../etc/whatever.
+        let root = Path::new("/lib");
+        assert!(stem_path(root, "abc", "../etc/passwd").is_err());
     }
 
     #[test]
