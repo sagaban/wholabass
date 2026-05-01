@@ -31,6 +31,11 @@ export type EngineState =
   | { kind: "paused"; offset: number }
   | { kind: "playing"; ctxStartTime: number; offsetAtStart: number };
 
+export interface LoopRegion {
+  a: number;
+  b: number;
+}
+
 const RAMP_SECONDS = 0.01;
 const TEMPO_MIN = 0.5;
 const TEMPO_MAX = 1.0;
@@ -101,6 +106,7 @@ export class StemEngine {
   private soloed: StemFlags = { ...ZERO_FLAGS };
   private masterVolume = 1;
   private tempo = 1.0;
+  private loop: LoopRegion | null = null;
 
   constructor(ctx: AudioContext, stretcherFactory: StretcherFactory) {
     this.ctx = ctx;
@@ -243,6 +249,41 @@ export class StemEngine {
 
   getTempo(): number {
     return this.tempo;
+  }
+
+  /**
+   * Define an A-B loop region. Caller is responsible for `a < b`; values
+   * outside [0, duration] are clamped. Pass `null` to clear.
+   */
+  setLoop(loop: LoopRegion | null): void {
+    if (!loop) {
+      this.loop = null;
+      return;
+    }
+    const dur = this.duration;
+    const a = clamp(loop.a, 0, dur);
+    const b = clamp(loop.b, 0, dur);
+    if (b <= a) return;
+    this.loop = { a, b };
+  }
+
+  clearLoop(): void {
+    this.loop = null;
+  }
+
+  getLoop(): LoopRegion | null {
+    return this.loop ? { ...this.loop } : null;
+  }
+
+  /**
+   * If a loop is active and the current audio position has crossed `b`,
+   * jump back to `a`. Call from a per-frame tick. Returns true on jump.
+   */
+  tickLoop(): boolean {
+    if (!this.loop || this.state.kind !== "playing") return false;
+    if (this.getCurrentTime() < this.loop.b) return false;
+    this.play(this.loop.a);
+    return true;
   }
 
   getCurrentTime(): number {

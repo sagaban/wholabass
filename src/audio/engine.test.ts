@@ -301,6 +301,73 @@ describe("StemEngine mixer setters", () => {
 // Tempo (T7).
 // ---------------------------------------------------------------------------
 
+describe("StemEngine A-B loop", () => {
+  test("setLoop stores and clamps the region", () => {
+    const { engine } = setup(); // duration = 100
+    engine.setLoop({ a: 30, b: 34 });
+    expect(engine.getLoop()).toEqual({ a: 30, b: 34 });
+
+    engine.setLoop({ a: -5, b: 200 });
+    expect(engine.getLoop()).toEqual({ a: 0, b: 100 });
+
+    engine.setLoop(null);
+    expect(engine.getLoop()).toBeNull();
+  });
+
+  test("setLoop ignores zero-or-reversed regions", () => {
+    const { engine } = setup();
+    engine.setLoop({ a: 50, b: 50 });
+    expect(engine.getLoop()).toBeNull();
+
+    engine.setLoop({ a: 60, b: 30 });
+    expect(engine.getLoop()).toBeNull();
+  });
+
+  test("tickLoop is a no-op while paused or before B", () => {
+    const { ctx, engine } = setup();
+    engine.setLoop({ a: 30, b: 34 });
+
+    // not playing → no jump
+    expect(engine.tickLoop()).toBe(false);
+
+    // playing but well before B
+    ctx.currentTime = 0;
+    engine.play(31);
+    expect(engine.tickLoop()).toBe(false);
+    expect(engine.getCurrentTime()).toBeCloseTo(31, 5);
+  });
+
+  test("tickLoop jumps back to A when the playhead crosses B", () => {
+    const { ctx, engine } = setup();
+    engine.setLoop({ a: 30, b: 34 });
+    ctx.currentTime = 0;
+    engine.play(30);
+    // Advance wall-clock past the 4s loop region.
+    ctx.currentTime = 4.5;
+    expect(engine.tickLoop()).toBe(true);
+    expect(engine.isPlaying).toBe(true);
+    expect(engine.getCurrentTime()).toBeCloseTo(30, 5);
+  });
+
+  test("loop respects the current tempo (audio-position drives the jump)", () => {
+    const { ctx, engine } = setup();
+    engine.setLoop({ a: 30, b: 34 });
+    ctx.currentTime = 0;
+    engine.play(30);
+    engine.setTempo(0.5);
+
+    // At 0.5x, 4s of audio takes 8s of wall-clock. After 4s wall we're
+    // only at audio_pos = 32 — no jump.
+    ctx.currentTime = 4;
+    expect(engine.tickLoop()).toBe(false);
+
+    // After 8s wall we're at audio_pos = 34 — jump.
+    ctx.currentTime = 8;
+    expect(engine.tickLoop()).toBe(true);
+    expect(engine.getCurrentTime()).toBeCloseTo(30, 5);
+  });
+});
+
 describe("StemEngine.setTempo", () => {
   test("ramps every stretcher's tempo and clamps to [0.5, 1.0]", () => {
     const { ctx, engine, stretchers } = setup();

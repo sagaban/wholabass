@@ -7,7 +7,14 @@ import { SoundTouchNode } from "@soundtouchjs/audio-worklet";
 import processorUrl from "@soundtouchjs/audio-worklet/processor?url";
 import { Box, HStack, VStack, styled } from "styled-system/jsx";
 import { Button, Slider } from "@/components/ui";
-import { StemEngine, STEM_NAMES, type StemBuffers, type StemName } from "@/audio/engine";
+import {
+  StemEngine,
+  STEM_NAMES,
+  type LoopRegion,
+  type StemBuffers,
+  type StemName,
+  type StretcherNode,
+} from "@/audio/engine";
 import { StemMixer } from "@/components/StemMixer";
 import { PianoRoll } from "@/components/PianoRoll";
 
@@ -25,6 +32,7 @@ export function Player({ songId }: PlayerProps) {
   const [isPlaying, setIsPlaying] = useState(false);
   const [duration, setDuration] = useState(0);
   const [tempo, setTempo] = useState(1);
+  const [loop, setLoopState] = useState<LoopRegion | null>(null);
 
   // Load stems whenever songId changes.
   useEffect(() => {
@@ -46,7 +54,7 @@ export function Player({ songId }: PlayerProps) {
         if (!engineRef.current) {
           engineRef.current = new StemEngine(
             ctx,
-            (c) => new SoundTouchNode(c) as unknown as import("@/audio/engine").StretcherNode,
+            (c) => new SoundTouchNode(c) as unknown as StretcherNode,
           );
         }
 
@@ -71,16 +79,19 @@ export function Player({ songId }: PlayerProps) {
     };
   }, [songId]);
 
-  // Drive the position display while playing.
+  // Drive the position display while playing; tick the loop watcher too.
   useEffect(() => {
     if (!isPlaying) return;
     let raf = 0;
     const tick = () => {
       const engine = engineRef.current;
       if (engine) {
+        // tickLoop returns true (and re-plays at A) when the playhead
+        // crosses B; on the next read we pick up the looped position.
+        engine.tickLoop();
         const t = engine.getCurrentTime();
         setPosition(t);
-        if (t >= engine.duration) {
+        if (t >= engine.duration && !engine.getLoop()) {
           setIsPlaying(false);
           return;
         }
@@ -115,6 +126,34 @@ export function Player({ songId }: PlayerProps) {
   const onTempo = (value: number) => {
     setTempo(value);
     engineRef.current?.setTempo(value);
+  };
+
+  const onSetA = () => {
+    const engine = engineRef.current;
+    if (!engine) return;
+    const a = engine.getCurrentTime();
+    const existingB = loop?.b;
+    // If we don't have a B yet, default to A + 4s (clamped to duration).
+    const b = existingB && existingB > a ? existingB : Math.min(a + 4, engine.duration);
+    if (b <= a) return;
+    engine.setLoop({ a, b });
+    setLoopState(engine.getLoop());
+  };
+
+  const onSetB = () => {
+    const engine = engineRef.current;
+    if (!engine) return;
+    const b = engine.getCurrentTime();
+    const existingA = loop?.a;
+    const a = existingA !== undefined && existingA < b ? existingA : Math.max(0, b - 4);
+    if (b <= a) return;
+    engine.setLoop({ a, b });
+    setLoopState(engine.getLoop());
+  };
+
+  const onClearLoop = () => {
+    engineRef.current?.clearLoop();
+    setLoopState(null);
   };
 
   if (load.kind === "loading") {
@@ -159,7 +198,32 @@ export function Player({ songId }: PlayerProps) {
             <Slider.HiddenInput />
           </Slider.Thumb>
         </Slider.Control>
+        {loop && (
+          <Slider.Marks
+            marks={[
+              { value: loop.a, label: "A" },
+              { value: loop.b, label: "B" },
+            ]}
+          />
+        )}
       </Slider.Root>
+
+      <HStack gap="2" alignItems="center" justifyContent="space-between">
+        <HStack gap="2" alignItems="center">
+          <Button size="xs" variant="outline" onClick={onSetA}>
+            Set A
+          </Button>
+          <Button size="xs" variant="outline" onClick={onSetB}>
+            Set B
+          </Button>
+          <Button size="xs" variant="outline" onClick={onClearLoop} disabled={!loop}>
+            Clear A-B
+          </Button>
+        </HStack>
+        <styled.span fontSize="xs" opacity="0.7" fontVariantNumeric="tabular-nums">
+          {loop ? `Loop ${fmtTime(loop.a)} → ${fmtTime(loop.b)}` : "no loop"}
+        </styled.span>
+      </HStack>
 
       <HStack gap="3" alignItems="center">
         <styled.span fontSize="sm" opacity="0.85" minWidth="56px">
