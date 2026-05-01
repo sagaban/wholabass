@@ -97,6 +97,12 @@ async fn ingest_file(
 }
 
 #[tauri::command]
+async fn list_library(app: AppHandle) -> Result<Vec<library::LibraryEntry>, String> {
+    let library_root = library::resolve_root(&app).map_err(|e| e.to_string())?;
+    Ok(library::list(&library_root, ids::PROCESSING_VERSION))
+}
+
+#[tauri::command]
 async fn read_stem(
     song_id: String,
     stem: String,
@@ -172,7 +178,12 @@ pub fn run() {
             });
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![ping, ingest_file, read_stem])
+        .invoke_handler(tauri::generate_handler![
+            ping,
+            ingest_file,
+            list_library,
+            read_stem
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

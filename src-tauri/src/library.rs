@@ -87,6 +87,45 @@ pub fn is_ready(root: &Path, id: &str, processing_version: u32) -> bool {
     all_stems_present(root, id)
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct LibraryEntry {
+    pub song_id: String,
+    pub title: String,
+    pub duration_sec: f64,
+    pub processing_version: u32,
+    pub created_at: f64,
+    pub ready: bool,
+}
+
+/// List every cache entry under `root` for which a parseable `meta.json`
+/// exists. Newest first by `created_at`. Returns an empty vec if `root`
+/// itself doesn't exist (first run).
+pub fn list(root: &Path, processing_version: u32) -> Vec<LibraryEntry> {
+    let Ok(read) = std::fs::read_dir(root) else {
+        return Vec::new();
+    };
+    let mut entries: Vec<LibraryEntry> = read
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
+        .filter_map(|e| {
+            let id = e.file_name().to_string_lossy().into_owned();
+            let meta = read_meta(root, &id)?;
+            let ready = meta.processing_version == processing_version
+                && all_stems_present(root, &id);
+            Some(LibraryEntry {
+                song_id: meta.song_id,
+                title: meta.title,
+                duration_sec: meta.duration,
+                processing_version: meta.processing_version,
+                created_at: meta.created_at,
+                ready,
+            })
+        })
+        .collect();
+    entries.sort_by(|a, b| b.created_at.partial_cmp(&a.created_at).unwrap_or(std::cmp::Ordering::Equal));
+    entries
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -223,6 +262,56 @@ mod tests {
         assert_eq!(meta.processing_version, 7);
         assert_eq!(meta.source.kind, "file");
         assert!((meta.duration - 12.34).abs() < 1e-9);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn list_returns_empty_for_missing_root() {
+        let root = std::env::temp_dir().join("wholabass-no-such-dir-xxxx");
+        assert!(list(&root, 1).is_empty());
+    }
+
+    #[test]
+    fn list_returns_entries_newest_first_with_ready_flag() {
+        let root = fresh_temp_root();
+        // older
+        write_complete_cache(&root, "old", 1);
+        let old_meta_path = song_dir(&root, "old").join("meta.json");
+        let old = std::fs::read_to_string(&old_meta_path)
+            .unwrap()
+            .replace("\"created_at\": 1.0", "\"created_at\": 100.0");
+        std::fs::write(&old_meta_path, old).unwrap();
+
+        // newer (and ready)
+        write_complete_cache(&root, "new", 1);
+        let new_meta_path = song_dir(&root, "new").join("meta.json");
+        let nw = std::fs::read_to_string(&new_meta_path)
+            .unwrap()
+            .replace("\"created_at\": 1.0", "\"created_at\": 200.0");
+        std::fs::write(&new_meta_path, nw).unwrap();
+
+        // stale (wrong processing_version → ready=false)
+        write_complete_cache(&root, "stale", 1);
+        let stale_meta_path = song_dir(&root, "stale").join("meta.json");
+        let stale = std::fs::read_to_string(&stale_meta_path)
+            .unwrap()
+            .replace("\"created_at\": 1.0", "\"created_at\": 50.0");
+        std::fs::write(&stale_meta_path, stale).unwrap();
+
+        // dir without meta.json should be ignored
+        ensure_song_dir(&root, "ghost").unwrap();
+
+        let entries = list(&root, 1);
+        let ids: Vec<_> = entries.iter().map(|e| e.song_id.as_str()).collect();
+        assert_eq!(ids, vec!["new", "old", "stale"]);
+        assert!(entries[0].ready);
+        let stale_entry = entries.iter().find(|e| e.song_id == "stale").unwrap();
+        assert!(stale_entry.ready); // version 1 still matches version 1
+
+        // Bumping processing_version makes everything not-ready.
+        let entries_v2 = list(&root, 2);
+        assert!(entries_v2.iter().all(|e| !e.ready));
+
         std::fs::remove_dir_all(&root).ok();
     }
 }

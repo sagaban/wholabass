@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
-import { Box, Stack, VStack, styled } from "styled-system/jsx";
-import { Player } from "@/components/Player";
+import { styled } from "styled-system/jsx";
+import { LibraryScreen } from "@/components/LibraryScreen";
+import { PlayerScreen } from "@/components/PlayerScreen";
 
 type PingResult = {
   ok: boolean;
@@ -10,13 +11,13 @@ type PingResult = {
   processing_version: number;
 };
 
-type IngestResult = {
+interface IngestResult {
   song_id: string;
   out_dir: string;
   stems: string[];
   duration_sec: number;
   cache_hit: boolean;
-};
+}
 
 type SidecarStatus =
   | { kind: "idle" }
@@ -27,13 +28,18 @@ type SidecarStatus =
 type IngestStatus =
   | { kind: "idle" }
   | { kind: "running"; path: string }
-  | { kind: "ready"; result: IngestResult }
   | { kind: "error"; message: string };
+
+type Route =
+  | { kind: "library" }
+  | { kind: "player"; songId: string; title: string };
 
 export default function App() {
   const [sidecar, setSidecar] = useState<SidecarStatus>({ kind: "idle" });
   const [ingest, setIngest] = useState<IngestStatus>({ kind: "idle" });
   const [hovering, setHovering] = useState(false);
+  const [route, setRoute] = useState<Route>({ kind: "library" });
+  const [refreshKey, setRefreshKey] = useState(0);
   const ingestingRef = useRef(false);
 
   useEffect(() => {
@@ -64,7 +70,14 @@ export default function App() {
         } else if (p.type === "drop") {
           setHovering(false);
           if (!ingestingRef.current && p.paths.length > 0) {
-            void runIngest(p.paths[0], setIngest, ingestingRef);
+            void runIngest(p.paths[0], setIngest, ingestingRef, (result) => {
+              setRefreshKey((k) => k + 1);
+              setRoute({
+                kind: "player",
+                songId: result.song_id,
+                title: titleFromIngest(result, p.paths[0]),
+              });
+            });
           }
         }
       })
@@ -81,14 +94,29 @@ export default function App() {
     };
   }, []);
 
+  if (route.kind === "player") {
+    return (
+      <PlayerScreen
+        songId={route.songId}
+        title={route.title}
+        onBack={() => {
+          setIngest({ kind: "idle" });
+          setRoute({ kind: "library" });
+        }}
+      />
+    );
+  }
+
   return (
-    <Box as="main" p="8" fontSize="lg">
-      <styled.h1 mt="0" mb="4">
-        wholabass
-      </styled.h1>
-      <SidecarLine status={sidecar} />
-      <DropZone hovering={hovering} ingest={ingest} />
-    </Box>
+    <LibraryScreen
+      hovering={hovering}
+      ingest={ingest}
+      refreshKey={refreshKey}
+      sidecarLine={<SidecarLine status={sidecar} />}
+      onPick={({ songId, title }) =>
+        setRoute({ kind: "player", songId, title })
+      }
+    />
   );
 }
 
@@ -96,6 +124,7 @@ async function runIngest(
   path: string,
   setIngest: (s: IngestStatus) => void,
   ingestingRef: React.MutableRefObject<boolean>,
+  onReady: (result: IngestResult) => void,
 ): Promise<void> {
   ingestingRef.current = true;
   setIngest({ kind: "running", path });
@@ -104,7 +133,8 @@ async function runIngest(
     console.log(
       `ingest ${result.cache_hit ? "cache hit" : "cache miss"}: ${result.song_id} (${result.duration_sec.toFixed(1)}s)`,
     );
-    setIngest({ kind: "ready", result });
+    setIngest({ kind: "idle" });
+    onReady(result);
   } catch (err: unknown) {
     setIngest({ kind: "error", message: String(err) });
   } finally {
@@ -112,95 +142,34 @@ async function runIngest(
   }
 }
 
+function titleFromIngest(_result: IngestResult, path: string): string {
+  const base = path.split("/").pop() ?? path;
+  const dot = base.lastIndexOf(".");
+  return dot > 0 ? base.slice(0, dot) : base;
+}
+
 function SidecarLine({ status }: { status: SidecarStatus }) {
   switch (status.kind) {
     case "idle":
     case "loading":
       return (
-        <styled.p opacity="0.7" m="0">
+        <styled.p opacity="0.7" m="0" fontSize="sm">
           sidecar: starting...
         </styled.p>
       );
     case "ok": {
       const ts = new Date(status.ping.timestamp * 1000).toISOString();
       return (
-        <styled.p m="0">
+        <styled.p m="0" fontSize="sm" opacity="0.7">
           sidecar: ok ({ts}) · processing v{status.ping.processing_version}
         </styled.p>
       );
     }
     case "error":
       return (
-        <styled.p color="error" m="0">
+        <styled.p color="error" m="0" fontSize="sm">
           sidecar error: {status.message}
         </styled.p>
-      );
-  }
-}
-
-function DropZone({
-  hovering,
-  ingest,
-}: {
-  hovering: boolean;
-  ingest: IngestStatus;
-}) {
-  return (
-    <Box
-      as="section"
-      mt="6"
-      p="8"
-      borderWidth="2px"
-      borderStyle="dashed"
-      borderColor={hovering ? "iris.9" : "border"}
-      borderRadius="l3"
-      textAlign="center"
-      opacity={ingest.kind === "running" ? 0.7 : 1}
-      transition="border-color 120ms ease"
-    >
-      <styled.p m="0">Drop an audio file (mp3 / wav / m4a / flac) here.</styled.p>
-      <IngestLine ingest={ingest} />
-    </Box>
-  );
-}
-
-function IngestLine({ ingest }: { ingest: IngestStatus }) {
-  switch (ingest.kind) {
-    case "idle":
-      return null;
-    case "running":
-      return (
-        <styled.p mt="4" opacity="0.8">
-          processing: {ingest.path}
-        </styled.p>
-      );
-    case "ready":
-      return (
-        <VStack mt="4" gap="2" alignItems="center">
-          <styled.p m="0">
-            ready: <styled.code>{ingest.result.song_id}</styled.code> ·{" "}
-            {ingest.result.duration_sec.toFixed(1)}s ·{" "}
-            <styled.span
-              fontSize="xs"
-              px="1.5"
-              py="0.5"
-              borderRadius="l1"
-              bg={ingest.result.cache_hit ? "green.4" : "iris.4"}
-              color={ingest.result.cache_hit ? "green.12" : "iris.12"}
-            >
-              {ingest.result.cache_hit ? "cache hit" : "fresh"}
-            </styled.span>
-          </styled.p>
-          <Player songId={ingest.result.song_id} />
-        </VStack>
-      );
-    case "error":
-      return (
-        <Stack mt="4">
-          <styled.p color="error" m="0">
-            error: {ingest.message}
-          </styled.p>
-        </Stack>
       );
   }
 }
