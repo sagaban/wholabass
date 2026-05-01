@@ -18,6 +18,9 @@ YT_DLP_OPTS_BASE: dict[str, Any] = {
     "quiet": True,
     "no_warnings": True,
     "noprogress": True,
+    # Belt-and-suspenders: even if the caller passes a URL with `&list=`
+    # we never want to download the whole playlist.
+    "noplaylist": True,
     "postprocessors": [
         {
             "key": "FFmpegExtractAudio",

@@ -52,6 +52,17 @@ pub fn song_id_from_url(raw: &str) -> Result<String, IdError> {
     Ok(song_id_from_bytes(video_id.as_bytes()))
 }
 
+/// Strip everything except the video id from a YouTube URL. Returns
+/// `https://www.youtube.com/watch?v=<id>`.
+///
+/// We pass this to yt-dlp instead of the raw URL so playlist (`&list=`),
+/// radio (`&start_radio=`), and tracking parameters never reach the
+/// downloader.
+pub fn canonical_youtube_url(raw: &str) -> Result<String, IdError> {
+    let id = youtube_video_id(raw)?;
+    Ok(format!("https://www.youtube.com/watch?v={id}"))
+}
+
 fn youtube_video_id(raw: &str) -> Result<String, IdError> {
     let parsed = url::Url::parse(raw.trim())?;
     let host = parsed
@@ -189,6 +200,28 @@ mod tests {
         let a = song_id_from_url("https://youtube.com/watch?v=dQw4w9WgXcQ&t=10").unwrap();
         let b = song_id_from_url("https://youtu.be/dQw4w9WgXcQ").unwrap();
         assert_eq!(a, b);
+    }
+
+    #[test]
+    fn canonical_youtube_url_strips_extras() {
+        let url = "https://www.youtube.com/watch?v=Jnq9wPDoDKg&list=RDJnq9wPDoDKg&start_radio=1";
+        assert_eq!(
+            canonical_youtube_url(url).unwrap(),
+            "https://www.youtube.com/watch?v=Jnq9wPDoDKg",
+        );
+    }
+
+    #[test]
+    fn canonical_youtube_url_normalises_short_form() {
+        assert_eq!(
+            canonical_youtube_url("https://youtu.be/dQw4w9WgXcQ?t=42").unwrap(),
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+        );
+    }
+
+    #[test]
+    fn canonical_youtube_url_rejects_invalid() {
+        assert!(canonical_youtube_url("https://vimeo.com/12345").is_err());
     }
 
     // Tiny tempfile helper to avoid pulling in the `tempfile` crate for one test.

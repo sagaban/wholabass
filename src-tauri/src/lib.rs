@@ -124,8 +124,11 @@ async fn ingest_url(
     }
 
     // Validating the URL up front means an invalid input never creates a
-    // half-written library/<id>/ directory.
+    // half-written library/<id>/ directory. We also strip query params
+    // (playlist, start_radio, tracking) by passing the canonical
+    // single-video URL to yt-dlp so it never picks up a playlist.
     let song_id = ids::song_id_from_url(&url).map_err(|e| e.to_string())?;
+    let url = ids::canonical_youtube_url(&url).map_err(|e| e.to_string())?;
     let library_root = library::resolve_root(&app).map_err(|e| e.to_string())?;
 
     if library::is_ready(&library_root, &song_id, ids::PROCESSING_VERSION) {
