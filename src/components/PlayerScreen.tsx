@@ -11,7 +11,7 @@ export function PlayerScreen() {
   const displayTitle = title ?? songId;
 
   return (
-    <Box as="main" p="8" fontSize="lg" maxWidth="3xl" mx="auto" w="full">
+    <Box as="main" p="8" fontSize="lg" maxWidth="6xl" mx="auto" w="full">
       <HStack justifyContent="space-between" alignItems="center" mb="4">
         <HStack gap="3" alignItems="center">
           <Button size="sm" variant="outline" onClick={() => void navigate({ to: "/" })}>

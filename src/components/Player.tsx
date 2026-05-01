@@ -5,7 +5,7 @@ import { SoundTouchNode } from "@soundtouchjs/audio-worklet";
 // loaded into the AudioContext via audioWorklet.addModule(). The package
 // exports `./processor` as the public entry for this file.
 import processorUrl from "@soundtouchjs/audio-worklet/processor?url";
-import { Box, HStack, VStack, styled } from "styled-system/jsx";
+import { Box, Grid, GridItem, HStack, VStack, styled } from "styled-system/jsx";
 import { Button, Slider } from "@/components/ui";
 import {
   StemEngine,
@@ -33,6 +33,7 @@ export function Player({ songId }: PlayerProps) {
   const [isPlaying, setIsPlaying] = useState(false);
   const [duration, setDuration] = useState(0);
   const [tempo, setTempo] = useState(1);
+  const [showDebug, setShowDebug] = useState(false);
   // A and B are tracked independently. The engine only enters a real
   // loop when both are set and a < b; otherwise the markers are display-only.
   const [markA, setMarkA] = useState<number | null>(null);
@@ -181,78 +182,31 @@ export function Player({ songId }: PlayerProps) {
   }
 
   return (
-    <VStack mt="5" gap="3" alignItems="stretch" width="min(540px, 100%)">
-      <HStack gap="3" alignItems="center">
-        <Button onClick={onTogglePlay} size="sm">
-          {isPlaying ? "Pause" : "Play"}
-        </Button>
-        <styled.span fontVariantNumeric="tabular-nums" opacity="0.85">
-          {fmtTime(position)} / {fmtTime(duration)}
-        </styled.span>
-      </HStack>
+    <Grid
+      mt="5"
+      gap="6"
+      gridTemplateColumns={{ base: "1fr", lg: "minmax(320px, 380px) 1fr" }}
+      alignItems="start"
+      w="full"
+    >
+      <GridItem>
+        <VStack gap="3" alignItems="stretch">
+          <HStack gap="3" alignItems="center">
+            <Button onClick={onTogglePlay} size="sm">
+              {isPlaying ? "Pause" : "Play"}
+            </Button>
+            <styled.span fontVariantNumeric="tabular-nums" opacity="0.85">
+              {fmtTime(position)} / {fmtTime(duration)}
+            </styled.span>
+          </HStack>
 
-      <Slider.Root
-        value={[position]}
-        onValueChange={(d) => onSeek(d.value[0] ?? 0)}
-        min={0}
-        max={duration}
-        step={0.05}
-        aria-label={["seek"]}
-      >
-        <Slider.Control>
-          <Slider.Track>
-            <Slider.Range />
-          </Slider.Track>
-          <Slider.Thumb index={0}>
-            <Slider.HiddenInput />
-          </Slider.Thumb>
-        </Slider.Control>
-        {(markA !== null || markB !== null) && (
-          <Slider.Marks
-            marks={[
-              ...(markA !== null ? [{ value: markA, label: "A" }] : []),
-              ...(markB !== null ? [{ value: markB, label: "B" }] : []),
-            ]}
-          />
-        )}
-      </Slider.Root>
-
-      <HStack gap="2" alignItems="center" justifyContent="space-between">
-        <HStack gap="2" alignItems="center">
-          <Button size="xs" variant={markA !== null ? "solid" : "outline"} onClick={onSetA}>
-            Set A
-          </Button>
-          <Button size="xs" variant={markB !== null ? "solid" : "outline"} onClick={onSetB}>
-            Set B
-          </Button>
-          <Button
-            size="xs"
-            variant="outline"
-            onClick={onClearLoop}
-            disabled={markA === null && markB === null}
-          >
-            Clear A-B
-          </Button>
-        </HStack>
-        <styled.span fontSize="xs" opacity="0.7" fontVariantNumeric="tabular-nums">
-          {loop
-            ? `Loop ${fmtTime(loop.a)} → ${fmtTime(loop.b)}`
-            : `A=${markA !== null ? fmtTime(markA) : "—"} · B=${markB !== null ? fmtTime(markB) : "—"}`}
-        </styled.span>
-      </HStack>
-
-      <HStack gap="3" alignItems="center">
-        <styled.span fontSize="sm" opacity="0.85" minWidth="56px">
-          Tempo
-        </styled.span>
-        <Box flex="1">
           <Slider.Root
-            value={[tempo]}
-            onValueChange={(d) => onTempo(d.value[0] ?? 1)}
-            min={0.5}
-            max={1}
-            step={0.01}
-            aria-label={["tempo"]}
+            value={[position]}
+            onValueChange={(d) => onSeek(d.value[0] ?? 0)}
+            min={0}
+            max={duration}
+            step={0.05}
+            aria-label={["seek"]}
           >
             <Slider.Control>
               <Slider.Track>
@@ -262,25 +216,93 @@ export function Player({ songId }: PlayerProps) {
                 <Slider.HiddenInput />
               </Slider.Thumb>
             </Slider.Control>
+            {(markA !== null || markB !== null) && (
+              <Slider.Marks
+                marks={[
+                  ...(markA !== null ? [{ value: markA, label: "A" }] : []),
+                  ...(markB !== null ? [{ value: markB, label: "B" }] : []),
+                ]}
+              />
+            )}
           </Slider.Root>
-        </Box>
-        <styled.span
-          fontVariantNumeric="tabular-nums"
-          fontSize="sm"
-          opacity="0.7"
-          minWidth="42px"
-          textAlign="right"
-        >
-          {Math.round(tempo * 100)}%
-        </styled.span>
-      </HStack>
 
-      {engineRef.current && (
-        <Tab songId={songId} engine={engineRef.current} durationSec={duration} />
-      )}
-      {engineRef.current && <PianoRoll songId={songId} engine={engineRef.current} />}
-      {engineRef.current && <StemMixer engine={engineRef.current} />}
-    </VStack>
+          <HStack gap="2" alignItems="center" justifyContent="space-between" flexWrap="wrap">
+            <HStack gap="2" alignItems="center">
+              <Button size="xs" variant={markA !== null ? "solid" : "outline"} onClick={onSetA}>
+                Set A
+              </Button>
+              <Button size="xs" variant={markB !== null ? "solid" : "outline"} onClick={onSetB}>
+                Set B
+              </Button>
+              <Button
+                size="xs"
+                variant="outline"
+                onClick={onClearLoop}
+                disabled={markA === null && markB === null}
+              >
+                Clear A-B
+              </Button>
+            </HStack>
+            <styled.span fontSize="xs" opacity="0.7" fontVariantNumeric="tabular-nums">
+              {loop
+                ? `Loop ${fmtTime(loop.a)} → ${fmtTime(loop.b)}`
+                : `A=${markA !== null ? fmtTime(markA) : "—"} · B=${markB !== null ? fmtTime(markB) : "—"}`}
+            </styled.span>
+          </HStack>
+
+          <HStack gap="3" alignItems="center">
+            <styled.span fontSize="sm" opacity="0.85" minWidth="56px">
+              Tempo
+            </styled.span>
+            <Box flex="1">
+              <Slider.Root
+                value={[tempo]}
+                onValueChange={(d) => onTempo(d.value[0] ?? 1)}
+                min={0.5}
+                max={1}
+                step={0.01}
+                aria-label={["tempo"]}
+              >
+                <Slider.Control>
+                  <Slider.Track>
+                    <Slider.Range />
+                  </Slider.Track>
+                  <Slider.Thumb index={0}>
+                    <Slider.HiddenInput />
+                  </Slider.Thumb>
+                </Slider.Control>
+              </Slider.Root>
+            </Box>
+            <styled.span
+              fontVariantNumeric="tabular-nums"
+              fontSize="sm"
+              opacity="0.7"
+              minWidth="42px"
+              textAlign="right"
+            >
+              {Math.round(tempo * 100)}%
+            </styled.span>
+          </HStack>
+
+          {engineRef.current && <StemMixer engine={engineRef.current} />}
+
+          <HStack justifyContent="flex-end">
+            <Button size="xs" variant="subtle" onClick={() => setShowDebug((v) => !v)}>
+              {showDebug ? "Hide debug" : "Show debug"}
+            </Button>
+          </HStack>
+          {showDebug && engineRef.current && (
+            <PianoRoll songId={songId} engine={engineRef.current} />
+          )}
+        </VStack>
+      </GridItem>
+
+      <GridItem minWidth="0">
+        {engineRef.current && (
+          <Tab songId={songId} engine={engineRef.current} durationSec={duration} />
+        )}
+      </GridItem>
+    </Grid>
   );
 }
 
