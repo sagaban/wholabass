@@ -6,7 +6,7 @@ See [plan.md](plan.md) for full task descriptions, acceptance criteria, and veri
 
 - [x] T0  — Foundation scaffold (Tauri + React + TS + Python sidecar + library helpers)
 - [x] T1  — Local file → 4 stems on disk (Demucs)
-- [ ] T2  — Multi-stem synced playback (Web Audio, master transport)
+- [x] T2  — Multi-stem synced playback (Web Audio, master transport)
 - [ ] T3  — Stem mixer (volume + mute/solo)
 - [ ] T4  — Cache short-circuit (skip pipeline on processed songs)
 - [ ] T5  — YouTube URL ingest (yt-dlp)
