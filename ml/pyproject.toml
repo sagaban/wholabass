@@ -27,7 +27,7 @@ select = ["E", "F", "I", "B", "UP", "N", "RUF"]
 [tool.mypy]
 python_version = "3.11"
 strict = true
-files = ["server.py", "pipeline"]
+files = ["server.py", "progress.py", "pipeline"]
 
 [[tool.mypy.overrides]]
 module = ["demucs.*", "soundfile", "torchaudio", "torchaudio.*"]

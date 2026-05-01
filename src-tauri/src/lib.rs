@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use serde::Serialize;
 use serde_json::Value;
-use tauri::{AppHandle, Manager, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 use tokio::sync::Mutex;
 
 use crate::ipc::Sidecar;
@@ -80,8 +80,9 @@ async fn ingest_file(
     }
 
     let sc = take_sidecar(&state).await?;
+    let app_emit = app.clone();
     let resp = sc
-        .call(
+        .call_with_progress(
             "separate",
             serde_json::json!({
                 "song_id": song_id,
@@ -89,6 +90,7 @@ async fn ingest_file(
                 "out_dir": out_dir.to_string_lossy(),
                 "processing_version": ids::PROCESSING_VERSION,
             }),
+            |progress, stage| emit_progress(&app_emit, progress, stage),
         )
         .await
         .map_err(|e| e.to_string())?;
@@ -128,21 +130,23 @@ async fn ingest_url(
     let out_dir =
         library::ensure_song_dir(&library_root, &song_id).map_err(|e| e.to_string())?;
     let sc = take_sidecar(&state).await?;
+    let app_emit = app.clone();
 
-    sc.call(
+    sc.call_with_progress(
         "download",
         serde_json::json!({
             "song_id": song_id,
             "url": url,
             "out_dir": out_dir.to_string_lossy(),
         }),
+        |progress, stage| emit_progress(&app_emit, progress, stage),
     )
     .await
     .map_err(|e| format!("download: {e}"))?;
 
     let source_path = out_dir.join("source.wav");
     let resp = sc
-        .call(
+        .call_with_progress(
             "separate",
             serde_json::json!({
                 "song_id": song_id,
@@ -150,11 +154,19 @@ async fn ingest_url(
                 "out_dir": out_dir.to_string_lossy(),
                 "processing_version": ids::PROCESSING_VERSION,
             }),
+            |progress, stage| emit_progress(&app_emit, progress, stage),
         )
         .await
         .map_err(|e| format!("separate: {e}"))?;
 
     parse_separate_response(&resp, &song_id, &out_dir)
+}
+
+fn emit_progress(app: &AppHandle, progress: f64, stage: &str) {
+    let _ = app.emit(
+        "ingest:progress",
+        serde_json::json!({ "progress": progress, "stage": stage }),
+    );
 }
 
 #[tauri::command]

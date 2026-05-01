@@ -27,6 +27,10 @@ export const keyframes = defineKeyframes({
     from: { opacity: '1' },
     to: { opacity: '0' },
   },
+  pulse: {
+    '0%, 100%': { opacity: '1', transform: 'scale(1)' },
+    '50%': { opacity: '0.4', transform: 'scale(0.7)' },
+  },
   // slide from (full)
   'slide-from-left-full': {
     from: { translate: '-100% 0' },

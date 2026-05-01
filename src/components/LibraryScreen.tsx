@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { useNavigate } from "@tanstack/react-router";
 import { Box, HStack, Stack, VStack, styled } from "styled-system/jsx";
@@ -41,6 +42,17 @@ type IngestStatus =
   | { kind: "running"; path: string }
   | { kind: "error"; message: string };
 
+interface ProgressEvent {
+  progress: number;
+  stage: string;
+}
+
+interface IngestProgress {
+  progress: number;
+  stage: string;
+  startedAt: number;
+}
+
 export function LibraryScreen() {
   const navigate = useNavigate();
   const [sidecar, setSidecar] = useState<SidecarStatus>({ kind: "idle" });
@@ -49,6 +61,7 @@ export function LibraryScreen() {
   const [refreshKey, setRefreshKey] = useState(0);
   const [entries, setEntries] = useState<LibraryEntry[] | null>(null);
   const [listError, setListError] = useState<string | null>(null);
+  const [progress, setProgress] = useState<IngestProgress | null>(null);
   const ingestingRef = useRef(false);
 
   // Sidecar ping (once on mount).
@@ -84,6 +97,36 @@ export function LibraryScreen() {
       cancelled = true;
     };
   }, [refreshKey]);
+
+  // Subscribe to sidecar progress events while ingesting.
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let mounted = true;
+    void listen<ProgressEvent>("ingest:progress", (event) => {
+      setProgress((prev) => ({
+        progress: event.payload.progress,
+        stage: event.payload.stage,
+        startedAt: prev?.startedAt ?? Date.now(),
+      }));
+    }).then((fn) => {
+      if (!mounted) fn();
+      else unlisten = fn;
+    });
+    return () => {
+      mounted = false;
+      unlisten?.();
+    };
+  }, []);
+
+  // Reset progress when an ingest starts (so the elapsed clock is fresh)
+  // or finishes.
+  useEffect(() => {
+    if (ingest.kind === "running") {
+      setProgress({ progress: 0, stage: "starting", startedAt: Date.now() });
+    } else {
+      setProgress(null);
+    }
+  }, [ingest.kind]);
 
   // Drag-drop — only mounted while this screen is alive.
   useEffect(() => {
@@ -151,6 +194,8 @@ export function LibraryScreen() {
           })
         }
       />
+
+      {ingest.kind === "running" && progress && <IngestProgressBar progress={progress} />}
 
       <styled.h2 mt="8" mb="3" fontSize="md" fontWeight="semibold" opacity="0.85">
         Library
@@ -258,6 +303,53 @@ function LibraryRow({ entry, onClick }: { entry: LibraryEntry; onClick: () => vo
         Open
       </Button>
     </HStack>
+  );
+}
+
+const STAGE_LABELS: Record<string, string> = {
+  starting: "Starting…",
+  downloading: "Downloading from YouTube",
+  download_error: "Download failed — retrying",
+  loading_model: "Loading separation model",
+  loading_source: "Loading audio",
+  separating: "Separating stems (this takes a moment)",
+  writing_stems: "Writing stem files",
+  done: "Finishing up",
+};
+
+function IngestProgressBar({ progress }: { progress: IngestProgress }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 250);
+    return () => clearInterval(id);
+  }, []);
+
+  const elapsed = Math.max(0, (now - progress.startedAt) / 1000);
+  const label = STAGE_LABELS[progress.stage] ?? progress.stage;
+  const pct = Math.max(0, Math.min(100, progress.progress));
+
+  return (
+    <Box mt="4" p="3" borderWidth="1px" borderColor="border" borderRadius="l2">
+      <HStack justifyContent="space-between" alignItems="center" mb="2">
+        <HStack gap="2" alignItems="center">
+          <styled.span
+            display="inline-block"
+            w="2"
+            h="2"
+            borderRadius="full"
+            bg="indigo.9"
+            animation="pulse 1.4s ease-in-out infinite"
+          />
+          <styled.span fontSize="sm">{label}…</styled.span>
+        </HStack>
+        <styled.span fontSize="xs" opacity="0.7" fontVariantNumeric="tabular-nums">
+          {pct.toFixed(0)}% · {elapsed.toFixed(1)}s
+        </styled.span>
+      </HStack>
+      <Box w="full" h="1.5" bg="border" borderRadius="full" overflow="hidden">
+        <Box h="full" bg="indigo.9" width={`${pct}%`} transition="width 200ms ease" />
+      </Box>
+    </Box>
   );
 }
 

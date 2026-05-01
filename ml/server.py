@@ -20,6 +20,8 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+import progress as progress_mod
+
 JsonObject = dict[str, Any]
 Handler = Callable[[JsonObject], JsonObject]
 
@@ -101,6 +103,9 @@ def dispatch(request: JsonObject) -> JsonObject:
             "error": {"code": "unknown_method", "message": f"unknown method: {method}"},
         }
 
+    progress_mod.set_emitter(
+        lambda p, s: _emit({"id": req_id, "progress": p, "stage": s}),
+    )
     try:
         result = handler(params)
     except Exception as exc:
@@ -112,6 +117,8 @@ def dispatch(request: JsonObject) -> JsonObject:
                 "trace": traceback.format_exc(),
             },
         }
+    finally:
+        progress_mod.clear_emitter()
     return {"id": req_id, "result": result}
 
 

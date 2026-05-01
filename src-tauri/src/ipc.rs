@@ -65,6 +65,21 @@ impl Sidecar {
     }
 
     pub async fn call(&self, method: &str, params: Value) -> Result<Value> {
+        self.call_with_progress(method, params, |_, _| {}).await
+    }
+
+    /// Like `call`, but also forwards each `{progress, stage}` event the
+    /// sidecar emits for this request to `on_progress`. The closure runs
+    /// inline on the IO task — keep it cheap (e.g. `app.emit(...)`).
+    pub async fn call_with_progress<F>(
+        &self,
+        method: &str,
+        params: Value,
+        on_progress: F,
+    ) -> Result<Value>
+    where
+        F: Fn(f64, &str),
+    {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed).to_string();
         let req = serde_json::json!({
             "id": id,
@@ -98,7 +113,7 @@ impl Sidecar {
             }
             let value: Value = serde_json::from_str(trimmed)
                 .with_context(|| format!("parse sidecar response: {trimmed}"))?;
-            // Ignore progress events with mismatched ids — we only care about result/error here.
+            // Ignore events with mismatched ids — they belong to other requests.
             let resp_id = value.get("id").and_then(|v| v.as_str()).unwrap_or("");
             if resp_id != id {
                 continue;
@@ -109,8 +124,9 @@ impl Sidecar {
             if let Some(result) = value.get("result") {
                 return Ok(result.clone());
             }
-            // Progress event for this id — keep reading.
-            if value.get("progress").is_some() {
+            if let Some(progress) = value.get("progress").and_then(|v| v.as_f64()) {
+                let stage = value.get("stage").and_then(|v| v.as_str()).unwrap_or("");
+                on_progress(progress, stage);
                 continue;
             }
             bail!("malformed sidecar response: {value}");

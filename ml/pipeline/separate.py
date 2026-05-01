@@ -18,6 +18,8 @@ from demucs.apply import apply_model
 from demucs.audio import convert_audio, save_audio
 from demucs.pretrained import get_model
 
+import progress
+
 MODEL_NAME = "htdemucs"
 STEM_NAMES: tuple[str, ...] = ("vocals", "drums", "bass", "other")
 
@@ -94,14 +96,19 @@ def separate_song(
     stems_dir = out_dir / "stems"
     stems_dir.mkdir(exist_ok=True)
 
+    progress.emit(0.0, "loading_model")
     model = _load_model()
+
+    progress.emit(5.0, "loading_source")
     wav, duration = _load_source(source_path, model.samplerate, model.audio_channels)
 
     save_audio(wav, str(out_dir / "source.wav"), model.samplerate)
 
+    progress.emit(10.0, "separating")
     sources = _run_demucs(model, wav)
     order = _ordered_stems(model.sources)
 
+    progress.emit(90.0, "writing_stems")
     for name, idx in zip(STEM_NAMES, order, strict=True):
         save_audio(sources[idx], str(stems_dir / f"{name}.wav"), model.samplerate)
 
@@ -113,6 +120,7 @@ def separate_song(
         duration_sec=duration,
         processing_version=processing_version,
     )
+    progress.emit(100.0, "done")
 
     return {
         "song_id": song_id,
