@@ -134,6 +134,19 @@ async fn run_separate(
     .await
     .map_err(|e| format!("transcribe: {e}"))?;
 
+    // Phase 2 beat / tempo grid for the tab renderer.
+    sc.call_with_progress(
+        "beats",
+        serde_json::json!({
+            "song_id": song_id,
+            "source_path": source_path.to_string_lossy(),
+            "out_dir": out_dir.to_string_lossy(),
+        }),
+        |progress, stage| emit_progress(&app_emit, progress, stage),
+    )
+    .await
+    .map_err(|e| format!("beats: {e}"))?;
+
     parse_separate_response(&resp, song_id, out_dir)
 }
 
@@ -252,12 +265,13 @@ async fn retry_song(
 
     let stems = library::all_stems_present(&library_root, &song_id);
     let midi = library::has_midi(&library_root, &song_id);
+    let beats = library::has_beats(&library_root, &song_id);
     let source = library::has_source(&library_root, &song_id);
 
-    if stems && midi {
+    if stems && midi && beats {
         // Already complete — return the cached IngestResult.
         let meta = library::read_meta(&library_root, &song_id)
-            .ok_or_else(|| "stems + midi present but meta missing".to_string())?;
+            .ok_or_else(|| "stems + midi + beats present but meta missing".to_string())?;
         return Ok(IngestResult {
             song_id: song_id.clone(),
             title: meta.title,
@@ -274,10 +288,8 @@ async fn retry_song(
         ));
     }
 
-    let _ = midi; // already inferred via the `stems && midi` branch above.
-
     *state.current_ingest.lock().await = Some(song_id.clone());
-    let result = run_retry(&state, &app, &song_id, &out_dir, stems).await;
+    let result = run_retry(&state, &app, &song_id, &out_dir, stems, midi).await;
     *state.current_ingest.lock().await = None;
     result
 }
@@ -288,6 +300,7 @@ async fn run_retry(
     song_id: &str,
     out_dir: &std::path::Path,
     stems: bool,
+    midi: bool,
 ) -> Result<IngestResult, String> {
     let library_root = out_dir
         .parent()
@@ -296,26 +309,45 @@ async fn run_retry(
 
     if !stems {
         // Source exists but stems don't — resume at separate. run_separate
-        // chains transcribe so we end up complete.
+        // chains transcribe + beats so we end up complete.
         let title = library::read_meta(library_root, song_id).map(|m| m.title);
         return run_separate(state, app, song_id, &source_path, out_dir, title.as_deref()).await;
     }
 
-    // Stems already present, only MIDI is missing — run transcribe alone.
     let sc = take_sidecar(state).await?;
     let app_emit = app.clone();
-    let bass_path = out_dir.join("stems").join("bass.wav");
+
+    if !midi {
+        // Stems present, MIDI missing — run transcribe (then beats below).
+        let bass_path = out_dir.join("stems").join("bass.wav");
+        sc.call_with_progress(
+            "transcribe",
+            serde_json::json!({
+                "song_id": song_id,
+                "bass_path": bass_path.to_string_lossy(),
+                "out_dir": out_dir.to_string_lossy(),
+            }),
+            |progress, stage| emit_progress(&app_emit, progress, stage),
+        )
+        .await
+        .map_err(|e| format!("transcribe: {e}"))?;
+    }
+
+    // Beats are always the last step, and they're the cheapest to redo, so
+    // we run them whenever this branch is reached (stems + midi present →
+    // only beats missing; stems present + midi missing → we just produced
+    // midi and now need beats).
     sc.call_with_progress(
-        "transcribe",
+        "beats",
         serde_json::json!({
             "song_id": song_id,
-            "bass_path": bass_path.to_string_lossy(),
+            "source_path": source_path.to_string_lossy(),
             "out_dir": out_dir.to_string_lossy(),
         }),
         |progress, stage| emit_progress(&app_emit, progress, stage),
     )
     .await
-    .map_err(|e| format!("transcribe: {e}"))?;
+    .map_err(|e| format!("beats: {e}"))?;
 
     let meta = library::read_meta(library_root, song_id)
         .ok_or_else(|| "post-retry meta missing".to_string())?;
@@ -389,6 +421,16 @@ async fn read_midi(song_id: String, app: AppHandle) -> Result<tauri::ipc::Respon
         .await
         .map_err(|e| format!("read {}: {e}", path.display()))?;
     Ok(tauri::ipc::Response::new(bytes))
+}
+
+#[tauri::command]
+async fn read_beats(song_id: String, app: AppHandle) -> Result<Value, String> {
+    let library_root = library::resolve_root(&app).map_err(|e| e.to_string())?;
+    let path = library::beats_path(&library_root, &song_id);
+    let text = tokio::fs::read_to_string(&path)
+        .await
+        .map_err(|e| format!("read {}: {e}", path.display()))?;
+    serde_json::from_str(&text).map_err(|e| format!("parse {}: {e}", path.display()))
 }
 
 async fn take_sidecar(state: &State<'_, AppState>) -> Result<Arc<Sidecar>, String> {
@@ -470,6 +512,7 @@ pub fn run() {
             delete_song,
             read_stem,
             read_midi,
+            read_beats,
             models_status
         ])
         .run(tauri::generate_context!())

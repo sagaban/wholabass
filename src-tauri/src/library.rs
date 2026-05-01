@@ -118,9 +118,19 @@ pub fn has_source(root: &Path, id: &str) -> bool {
     source_path(root, id).is_file()
 }
 
+/// `<root>/<id>/beats.json` (Phase 2).
+pub fn beats_path(root: &Path, id: &str) -> PathBuf {
+    song_dir(root, id).join("beats.json")
+}
+
+pub fn has_beats(root: &Path, id: &str) -> bool {
+    beats_path(root, id).is_file()
+}
+
 /// True iff the cache for `id` is complete and matches the current
-/// processing version. Used to short-circuit the Demucs + transcribe
-/// pipeline. A stale or partial entry returns false so it gets reprocessed.
+/// processing version. Used to short-circuit the Demucs + transcribe +
+/// beats pipeline. A stale or partial entry returns false so it gets
+/// reprocessed.
 pub fn is_ready(root: &Path, id: &str, processing_version: u32) -> bool {
     let Some(meta) = read_meta(root, id) else {
         return false;
@@ -128,7 +138,7 @@ pub fn is_ready(root: &Path, id: &str, processing_version: u32) -> bool {
     if meta.processing_version != processing_version {
         return false;
     }
-    all_stems_present(root, id) && has_midi(root, id)
+    all_stems_present(root, id) && has_midi(root, id) && has_beats(root, id)
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -142,6 +152,7 @@ pub struct LibraryEntry {
     pub has_source: bool,
     pub has_stems: bool,
     pub has_midi: bool,
+    pub has_beats: bool,
 }
 
 /// List every cache entry under `root` for which a parseable `meta.json`
@@ -160,7 +171,8 @@ pub fn list(root: &Path, processing_version: u32) -> Vec<LibraryEntry> {
             let stems = all_stems_present(root, &id);
             let midi = has_midi(root, &id);
             let source = has_source(root, &id);
-            let ready = meta.processing_version == processing_version && stems && midi;
+            let beats = has_beats(root, &id);
+            let ready = meta.processing_version == processing_version && stems && midi && beats;
             Some(LibraryEntry {
                 song_id: meta.song_id,
                 title: meta.title,
@@ -171,6 +183,7 @@ pub fn list(root: &Path, processing_version: u32) -> Vec<LibraryEntry> {
                 has_source: source,
                 has_stems: stems,
                 has_midi: midi,
+                has_beats: beats,
             })
         })
         .collect();
@@ -252,6 +265,7 @@ mod tests {
             std::fs::write(stem_path(root, id, name).unwrap(), b"riff").unwrap();
         }
         std::fs::write(midi_path(root, id), b"MThd").unwrap();
+        std::fs::write(beats_path(root, id), b"{\"tempo_bpm\":120,\"beats\":[]}").unwrap();
         let meta = format!(
             r#"{{
   "song_id": "{id}",
@@ -303,6 +317,15 @@ mod tests {
         let root = fresh_temp_root();
         write_complete_cache(&root, "abc", 1);
         std::fs::remove_file(midi_path(&root, "abc")).unwrap();
+        assert!(!is_ready(&root, "abc", 1));
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn is_ready_false_when_beats_missing() {
+        let root = fresh_temp_root();
+        write_complete_cache(&root, "abc", 1);
+        std::fs::remove_file(beats_path(&root, "abc")).unwrap();
         assert!(!is_ready(&root, "abc", 1));
         std::fs::remove_dir_all(&root).ok();
     }

@@ -93,6 +93,16 @@ def handle_models(_params: JsonObject) -> JsonObject:
     return {"demucs_ready": is_demucs_ready()}
 
 
+def handle_beats(params: JsonObject) -> JsonObject:
+    from pipeline.beats import track_beats
+
+    song_id = _require_str(params, "song_id")
+    source_path = Path(_require_str(params, "source_path"))
+    out_dir = Path(_require_str(params, "out_dir"))
+
+    return track_beats(song_id=song_id, source_path=source_path, out_dir=out_dir)
+
+
 def _require_str(params: JsonObject, key: str) -> str:
     value = params.get(key)
     if not isinstance(value, str) or not value:
@@ -112,6 +122,7 @@ HANDLERS: dict[str, Handler] = {
     "separate": handle_separate,
     "download": handle_download,
     "transcribe": handle_transcribe,
+    "beats": handle_beats,
     "models": handle_models,
 }
 

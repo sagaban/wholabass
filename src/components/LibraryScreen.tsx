@@ -33,6 +33,7 @@ export interface LibraryEntry {
   has_source: boolean;
   has_stems: boolean;
   has_midi: boolean;
+  has_beats: boolean;
 }
 
 type SidecarStatus =
@@ -400,6 +401,7 @@ function LibraryRow({
             <StepPill label="source" done={entry.has_source} />
             <StepPill label="stems" done={entry.has_stems} />
             <StepPill label="midi" done={entry.has_midi} />
+            <StepPill label="beats" done={entry.has_beats} />
           </HStack>
         )}
       </VStack>

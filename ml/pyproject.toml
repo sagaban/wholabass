@@ -9,6 +9,9 @@ dependencies = [
   "torchcodec>=0.4",
   "yt-dlp>=2024.5.27",
   "basic-pitch[onnx]>=0.4.0",
+  # Already transitive via basic-pitch; pinned here so the beat tracker
+  # in pipeline/beats.py owns its version bound.
+  "librosa>=0.10",
 ]
 
 [dependency-groups]
@@ -39,6 +42,8 @@ module = [
   "basic_pitch",
   "basic_pitch.*",
   "pretty_midi",
+  "librosa",
+  "librosa.*",
 ]
 ignore_missing_imports = true
 
