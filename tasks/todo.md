@@ -12,7 +12,7 @@ See [plan.md](plan.md) for full task descriptions, acceptance criteria, and veri
 - [x] T5 — YouTube URL ingest (yt-dlp)
 - [x] T6 — Bass MIDI + piano-roll (basic-pitch + Canvas)
 - [x] T7 — Time-stretch (SoundTouch AudioWorklet, pitch-preserving)
-- [ ] T8 — A-B loop
+- [x] T8 — A-B loop
 
 ## 🚩 Checkpoint — practice-tool MVP demo + go/no-go
 
