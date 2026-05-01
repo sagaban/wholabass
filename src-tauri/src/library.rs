@@ -127,6 +127,22 @@ pub fn has_beats(root: &Path, id: &str) -> bool {
     beats_path(root, id).is_file()
 }
 
+/// Rewrite `<root>/<id>/meta.json` with `processing_version` set to the
+/// supplied value. Used by the retry path when artifacts on disk are
+/// already complete but were produced under an older version — we mark
+/// them current so the entry shows as ready without redoing the work.
+pub fn bump_processing_version(root: &Path, id: &str, version: u32) -> std::io::Result<()> {
+    let mut meta = read_meta(root, id)
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "meta.json missing"))?;
+    if meta.processing_version == version {
+        return Ok(());
+    }
+    meta.processing_version = version;
+    let path = song_dir(root, id).join("meta.json");
+    let bytes = serde_json::to_vec_pretty(&meta).map_err(std::io::Error::other)?;
+    std::fs::write(path, bytes)
+}
+
 /// True iff the cache for `id` is complete and matches the current
 /// processing version. Used to short-circuit the Demucs + transcribe +
 /// beats pipeline. A stale or partial entry returns false so it gets

@@ -269,7 +269,11 @@ async fn retry_song(
     let source = library::has_source(&library_root, &song_id);
 
     if stems && midi && beats {
-        // Already complete — return the cached IngestResult.
+        // All artifacts present. If meta.processing_version is stale (e.g.
+        // ingested before T13 added beats), bump it so the entry reads as
+        // ready — otherwise the retry button would stay "Retry" forever.
+        library::bump_processing_version(&library_root, &song_id, ids::PROCESSING_VERSION)
+            .map_err(|e| format!("bump processing_version: {e}"))?;
         let meta = library::read_meta(&library_root, &song_id)
             .ok_or_else(|| "stems + midi + beats present but meta missing".to_string())?;
         return Ok(IngestResult {
@@ -349,6 +353,11 @@ async fn run_retry(
     .await
     .map_err(|e| format!("beats: {e}"))?;
 
+    // Resume paths that don't go through `separate` (transcribe-only,
+    // beats-only) skip the sidecar's meta.json rewrite, so we bump the
+    // version here to mark the entry ready.
+    library::bump_processing_version(library_root, song_id, ids::PROCESSING_VERSION)
+        .map_err(|e| format!("bump processing_version: {e}"))?;
     let meta = library::read_meta(library_root, song_id)
         .ok_or_else(|| "post-retry meta missing".to_string())?;
     Ok(IngestResult {
