@@ -97,6 +97,67 @@ async fn ingest_file(
 }
 
 #[tauri::command]
+async fn ingest_url(
+    url: String,
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<IngestResult, String> {
+    let url = url.trim().to_string();
+    if url.is_empty() {
+        return Err("empty url".to_string());
+    }
+
+    // Validating the URL up front means an invalid input never creates a
+    // half-written library/<id>/ directory.
+    let song_id = ids::song_id_from_url(&url).map_err(|e| e.to_string())?;
+    let library_root = library::resolve_root(&app).map_err(|e| e.to_string())?;
+
+    if library::is_ready(&library_root, &song_id, ids::PROCESSING_VERSION) {
+        let meta = library::read_meta(&library_root, &song_id)
+            .ok_or_else(|| "is_ready=true but read_meta failed".to_string())?;
+        let out_dir = library::song_dir(&library_root, &song_id);
+        return Ok(IngestResult {
+            song_id,
+            out_dir: out_dir.display().to_string(),
+            stems: library::STEM_NAMES.iter().map(|s| (*s).to_string()).collect(),
+            duration_sec: meta.duration,
+            cache_hit: true,
+        });
+    }
+
+    let out_dir =
+        library::ensure_song_dir(&library_root, &song_id).map_err(|e| e.to_string())?;
+    let sc = take_sidecar(&state).await?;
+
+    sc.call(
+        "download",
+        serde_json::json!({
+            "song_id": song_id,
+            "url": url,
+            "out_dir": out_dir.to_string_lossy(),
+        }),
+    )
+    .await
+    .map_err(|e| format!("download: {e}"))?;
+
+    let source_path = out_dir.join("source.wav");
+    let resp = sc
+        .call(
+            "separate",
+            serde_json::json!({
+                "song_id": song_id,
+                "source_path": source_path.to_string_lossy(),
+                "out_dir": out_dir.to_string_lossy(),
+                "processing_version": ids::PROCESSING_VERSION,
+            }),
+        )
+        .await
+        .map_err(|e| format!("separate: {e}"))?;
+
+    parse_separate_response(&resp, &song_id, &out_dir)
+}
+
+#[tauri::command]
 async fn list_library(app: AppHandle) -> Result<Vec<library::LibraryEntry>, String> {
     let library_root = library::resolve_root(&app).map_err(|e| e.to_string())?;
     Ok(library::list(&library_root, ids::PROCESSING_VERSION))
@@ -181,6 +242,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             ping,
             ingest_file,
+            ingest_url,
             list_library,
             read_stem
         ])

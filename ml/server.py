@@ -52,6 +52,16 @@ def handle_separate(params: JsonObject) -> JsonObject:
     )
 
 
+def handle_download(params: JsonObject) -> JsonObject:
+    from pipeline.download import download_song
+
+    song_id = _require_str(params, "song_id")
+    url = _require_str(params, "url")
+    out_dir = Path(_require_str(params, "out_dir"))
+
+    return download_song(song_id=song_id, url=url, out_dir=out_dir)
+
+
 def _require_str(params: JsonObject, key: str) -> str:
     value = params.get(key)
     if not isinstance(value, str) or not value:
@@ -69,6 +79,7 @@ def _require_int(params: JsonObject, key: str) -> int:
 HANDLERS: dict[str, Handler] = {
     "ping": handle_ping,
     "separate": handle_separate,
+    "download": handle_download,
 }
 
 

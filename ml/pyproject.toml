@@ -7,6 +7,7 @@ dependencies = [
   "demucs>=4.0.1",
   "soundfile>=0.13",
   "torchcodec>=0.4",
+  "yt-dlp>=2024.5.27",
 ]
 
 [dependency-groups]

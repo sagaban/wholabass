@@ -99,14 +99,19 @@ export function LibraryScreen() {
         } else if (p.type === "drop") {
           setHovering(false);
           if (!ingestingRef.current && p.paths.length > 0) {
-            void runIngest(p.paths[0], setIngest, ingestingRef, (result) => {
-              setRefreshKey((k) => k + 1);
-              void navigate({
-                to: "/play/$songId",
-                params: { songId: result.song_id },
-                search: { title: titleFromPath(p.paths[0]) },
-              });
-            });
+            void runIngest(
+              { kind: "file", path: p.paths[0] },
+              setIngest,
+              ingestingRef,
+              (result) => {
+                setRefreshKey((k) => k + 1);
+                void navigate({
+                  to: "/play/$songId",
+                  params: { songId: result.song_id },
+                  search: { title: titleFromPath(p.paths[0]) },
+                });
+              },
+            );
           }
         }
       })
@@ -132,6 +137,20 @@ export function LibraryScreen() {
       <SidecarLine status={sidecar} />
 
       <DropZone hovering={hovering} ingest={ingest} />
+
+      <UrlInput
+        ingest={ingest}
+        onSubmit={(url) =>
+          void runIngest({ kind: "url", url }, setIngest, ingestingRef, (result) => {
+            setRefreshKey((k) => k + 1);
+            void navigate({
+              to: "/play/$songId",
+              params: { songId: result.song_id },
+              search: { title: result.song_id },
+            });
+          })
+        }
+      />
 
       <styled.h2 mt="8" mb="3" fontSize="md" fontWeight="semibold" opacity="0.85">
         Library
@@ -176,16 +195,22 @@ export function LibraryScreen() {
   );
 }
 
+type IngestSource = { kind: "file"; path: string } | { kind: "url"; url: string };
+
 async function runIngest(
-  path: string,
+  source: IngestSource,
   setIngest: (s: IngestStatus) => void,
   ingestingRef: React.MutableRefObject<boolean>,
   onReady: (result: IngestResult) => void,
 ): Promise<void> {
   ingestingRef.current = true;
-  setIngest({ kind: "running", path });
+  const label = source.kind === "file" ? source.path : source.url;
+  setIngest({ kind: "running", path: label });
   try {
-    const result = await invoke<IngestResult>("ingest_file", { path });
+    const result =
+      source.kind === "file"
+        ? await invoke<IngestResult>("ingest_file", { path: source.path })
+        : await invoke<IngestResult>("ingest_url", { url: source.url });
     console.log(
       `ingest ${result.cache_hit ? "cache hit" : "cache miss"}: ${result.song_id} (${result.duration_sec.toFixed(1)}s)`,
     );
@@ -231,6 +256,41 @@ function LibraryRow({ entry, onClick }: { entry: LibraryEntry; onClick: () => vo
         onClick={onClick}
       >
         Open
+      </Button>
+    </HStack>
+  );
+}
+
+function UrlInput({ ingest, onSubmit }: { ingest: IngestStatus; onSubmit: (url: string) => void }) {
+  const [url, setUrl] = useState("");
+  const trimmed = url.trim();
+  const disabled = ingest.kind === "running" || trimmed === "";
+  const submit = () => {
+    if (!disabled) onSubmit(trimmed);
+  };
+  return (
+    <HStack mt="3" gap="2">
+      <styled.input
+        value={url}
+        onChange={(e) => setUrl(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") submit();
+        }}
+        placeholder="…or paste a YouTube URL"
+        flex="1"
+        px="3"
+        py="2"
+        borderWidth="1px"
+        borderColor="border"
+        borderRadius="l2"
+        bg="canvas"
+        color="fg.default"
+        fontSize="md"
+        _placeholder={{ color: "fg.subtle" }}
+        _focus={{ outline: "none", borderColor: "indigo.9" }}
+      />
+      <Button onClick={submit} disabled={disabled}>
+        Submit
       </Button>
     </HStack>
   );
