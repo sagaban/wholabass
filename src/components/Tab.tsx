@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Box, styled } from "styled-system/jsx";
+import { Box } from "styled-system/jsx";
+import { css } from "styled-system/css";
 import { type StemEngine } from "@/audio/engine";
 import { loadBassNotes, type BassNote } from "@/audio/midi";
 import {
@@ -143,7 +144,11 @@ function TabSurface({ tabNotes, beats, engine, durationSec }: TabSurfaceProps) {
         bg="canvas"
         height={`${height + 4}px`}
       >
-        <styled.svg width={width} height={height} display="block" fontFamily="inherit">
+        <svg
+          width={width}
+          height={height}
+          className={css({ display: "block", fontFamily: "inherit" })}
+        >
           {/* String lines */}
           {STRING_LABELS.map((label, i) => {
             const y = stringIndexToY(i, layout);
@@ -240,7 +245,7 @@ function TabSurface({ tabNotes, beats, engine, durationSec }: TabSurfaceProps) {
             stroke="var(--colors-indigo-9)"
             strokeWidth={2}
           />
-        </styled.svg>
+        </svg>
       </Box>
     </Box>
   );
