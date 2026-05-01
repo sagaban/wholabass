@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { Button } from "@/components/ui";
 
 type PingResult = {
   ok: boolean;
@@ -159,11 +160,24 @@ function IngestLine({ ingest }: { ingest: IngestStatus }) {
       );
     case "ready":
       return (
-        <p style={{ marginTop: "1rem" }}>
-          ready: <code>{ingest.result.song_id}</code> ·{" "}
-          {ingest.result.duration_sec.toFixed(1)}s · stems:{" "}
-          {ingest.result.stems.join(", ")}
-        </p>
+        <div
+          style={{
+            marginTop: "1rem",
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "center",
+            gap: "0.75rem",
+          }}
+        >
+          <p style={{ margin: 0 }}>
+            ready: <code>{ingest.result.song_id}</code> ·{" "}
+            {ingest.result.duration_sec.toFixed(1)}s · stems:{" "}
+            {ingest.result.stems.join(", ")}
+          </p>
+          <Button size="sm" variant="outline" disabled>
+            Play (T2)
+          </Button>
+        </div>
       );
     case "error":
       return (
