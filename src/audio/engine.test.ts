@@ -49,7 +49,11 @@ describe("currentOffset", () => {
 // ---------------------------------------------------------------------------
 
 type FakeGainNode = GainNode & {
-  gain: AudioParam & { linearRampToValueAtTime: ReturnType<typeof vi.fn> };
+  gain: AudioParam & {
+    linearRampToValueAtTime: ReturnType<typeof vi.fn>;
+    setValueAtTime: ReturnType<typeof vi.fn>;
+    cancelScheduledValues: ReturnType<typeof vi.fn>;
+  };
 };
 
 class FakeAudioContext {
@@ -62,6 +66,8 @@ class FakeAudioContext {
       gain: {
         value: 1,
         linearRampToValueAtTime: vi.fn(),
+        setValueAtTime: vi.fn(),
+        cancelScheduledValues: vi.fn(),
       } as unknown as FakeGainNode["gain"],
       connect: vi.fn(),
       disconnect: vi.fn(),

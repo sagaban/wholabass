@@ -50,9 +50,9 @@ export function StemMixer({ engine }: StemMixerProps) {
         padding: "0.75rem",
         border: "1px solid #333",
         borderRadius: 8,
-        display: "grid",
-        gridTemplateColumns: "repeat(4, 1fr)",
-        gap: "0.75rem",
+        display: "flex",
+        flexDirection: "column",
+        gap: "0.5rem",
         width: "min(540px, 100%)",
       }}
     >
@@ -88,25 +88,23 @@ function Strip({
   return (
     <div
       style={{
-        display: "flex",
-        flexDirection: "column",
+        display: "grid",
+        gridTemplateColumns: "70px 1fr 36px 70px",
         alignItems: "center",
         gap: "0.5rem",
       }}
     >
-      <div style={{ fontSize: "0.85rem", textTransform: "capitalize" }}>{stem}</div>
+      <div style={{ fontSize: "0.9rem", textTransform: "capitalize" }}>{stem}</div>
 
       <Slider.Root
-        orientation="vertical"
         value={[state.volume]}
         onValueChange={(d) => onVolumeChange(d.value[0] ?? 0)}
         min={0}
         max={1}
         step={0.01}
-        style={{ height: 120 }}
         aria-label={[`${stem} volume`]}
       >
-        <Slider.Control style={{ height: "100%" }}>
+        <Slider.Control>
           <Slider.Track>
             <Slider.Range />
           </Slider.Track>
@@ -121,12 +119,13 @@ function Strip({
           fontVariantNumeric: "tabular-nums",
           fontSize: "0.8rem",
           opacity: 0.7,
+          textAlign: "right",
         }}
       >
         {Math.round(state.volume * 100)}
       </div>
 
-      <div style={{ display: "flex", gap: "0.25rem" }}>
+      <div style={{ display: "flex", gap: "0.25rem", justifyContent: "flex-end" }}>
         <Button
           size="xs"
           variant={state.muted ? "solid" : "outline"}

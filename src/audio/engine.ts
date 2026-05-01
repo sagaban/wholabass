@@ -107,7 +107,12 @@ export class StemEngine {
     for (const name of STEM_NAMES) {
       if (!this.gains[name]) {
         const g = this.ctx.createGain();
-        g.gain.value = effectiveGain(this.volumes, this.muted, this.soloed, name);
+        // Anchor the AudioParam timeline so future linearRampToValueAtTime
+        // calls have a defined start value.
+        g.gain.setValueAtTime(
+          effectiveGain(this.volumes, this.muted, this.soloed, name),
+          this.ctx.currentTime,
+        );
         g.connect(this.ctx.destination);
         this.gains[name] = g;
       }
@@ -143,11 +148,17 @@ export class StemEngine {
 
   /** Recompute effective gains and ramp every GainNode to its new value. */
   private applyMix(): void {
-    const target = this.ctx.currentTime + RAMP_SECONDS;
+    const now = this.ctx.currentTime;
+    const target = now + RAMP_SECONDS;
     for (const name of STEM_NAMES) {
       const node = this.gains[name];
       if (!node) continue;
       const value = effectiveGain(this.volumes, this.muted, this.soloed, name);
+      // Cancel pending automation, anchor the current value at `now`, then
+      // ramp. Without the anchor the ramp's start value is undefined when
+      // gain.value was set via the property assignment rather than scheduled.
+      node.gain.cancelScheduledValues(now);
+      node.gain.setValueAtTime(node.gain.value, now);
       node.gain.linearRampToValueAtTime(value, target);
     }
   }
