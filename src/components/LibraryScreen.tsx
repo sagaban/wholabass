@@ -123,9 +123,9 @@ export function LibraryScreen() {
   }, [navigate]);
 
   return (
-    <Box as="main" p="8" fontSize="lg">
+    <Box as="main" p="8" fontSize="lg" maxWidth="3xl" mx="auto" w="full">
       <HStack justifyContent="space-between" alignItems="center" mb="4">
-        <styled.h1 m="0">wholabass</styled.h1>
+        <styled.h1 m="0">Wholabass</styled.h1>
         <ThemeToggle />
       </HStack>
       <SidecarLine status={sidecar} />
