@@ -486,7 +486,15 @@ function IngestProgressBar({
         </HStack>
       </HStack>
       <Box w="full" h="1.5" bg="border" borderRadius="full" overflow="hidden">
-        <Box h="full" bg="indigo.9" width={`${pct}%`} transition="width 200ms ease" />
+        <Box
+          h="full"
+          bg="indigo.9"
+          transition="width 200ms ease"
+          // Dynamic width — Panda extracts atomic classes at build time, so
+          // a runtime `${pct}%` can't be expressed as a style prop. Inline
+          // style is the documented carve-out for runtime-computed values.
+          style={{ width: `${pct}%` }}
+        />
       </Box>
     </Box>
   );
