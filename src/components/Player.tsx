@@ -17,6 +17,7 @@ import {
 } from "@/audio/engine";
 import { StemMixer } from "@/components/StemMixer";
 import { PianoRoll } from "@/components/PianoRoll";
+import { Tab } from "@/components/Tab";
 
 type LoadStatus = { kind: "loading" } | { kind: "ready" } | { kind: "error"; message: string };
 
@@ -274,6 +275,9 @@ export function Player({ songId }: PlayerProps) {
         </styled.span>
       </HStack>
 
+      {engineRef.current && (
+        <Tab songId={songId} engine={engineRef.current} durationSec={duration} />
+      )}
       {engineRef.current && <PianoRoll songId={songId} engine={engineRef.current} />}
       {engineRef.current && <StemMixer engine={engineRef.current} />}
     </VStack>
