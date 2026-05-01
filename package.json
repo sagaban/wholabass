@@ -18,6 +18,7 @@
   },
   "dependencies": {
     "@ark-ui/react": "^5.36.2",
+    "@fontsource/victor-mono": "^5.2.8",
     "@soundtouchjs/audio-worklet": "^1.0.10",
     "@tanstack/react-router": "^1.169.1",
     "@tauri-apps/api": "^2.11.0",
