@@ -350,9 +350,160 @@ Build:
 
 ## Out of scope (do not start)
 
-- Tab generation (Phase 2).
-- Tab editing (Phase 3).
 - 5-string / drop tunings.
 - Export (PDF/MIDI/GP5/MusicXML).
 - Auto-update, code signing, distribution.
 - Telemetry of any kind.
+
+---
+
+# Phase 2 Implementation Plan
+
+After the 🚩 MVP checkpoint. Decisions per SPEC §2 Phase 2:
+
+- Tempo + bar grid: sidecar `librosa.beat.beat_track`, persisted as
+  `library/<id>/beats.json`, added to cache-readiness.
+- MIDI playback: ships now (alongside audio).
+- Section / chord / repeat labels: skipped — Phase 3.
+- Layout: single screen — narrower transport on the left, Tab on the right.
+
+## Phase 2 dependency graph
+
+```
+T13 beats sidecar ──┬──> T14 fingering optimiser ──> T15 SVG tab renderer
+                    │                                       │
+                    │                                       └──> T16 split layout (Player ↔ Tab)
+                    │
+                    └──> T17 MIDI playback (Tone.js) — depends on T13 only
+                                       │
+                                       └──> T18 rhythm notation polish (beams, ties)
+```
+
+T17 can land in parallel with T15/T16 once T13 is in.
+
+---
+
+### T13 — Beat / tempo sidecar + cache integration
+
+**Why:** the tab grid needs tempo + per-beat times. Without it the tab is a flat list of notes.
+
+Build:
+
+- `ml/pipeline/beats.py` with `track_beats(source_path) -> {tempo_bpm: float, beats: [seconds]}` using `librosa.beat.beat_track`. `_run_librosa` is the test seam.
+- `server.py`: register `beats` handler.
+- `run_separate` in Rust chains a `beats` call after `transcribe`, writing `library/<id>/beats.json`.
+- `library::is_ready` requires `beats.json`; bump `PROCESSING_VERSION` (1 → 2 already; → 3 here).
+- New Tauri command `read_beats(song_id) -> {tempo_bpm, beats}`.
+
+**Acceptance:**
+
+- Re-process a known song → `beats.json` lands on disk with a sane tempo (e.g., a 120-BPM track reports 115–125).
+- Older entries are flagged stale on the library list and Retry resumes from `beats` only when stems + midi already exist.
+
+---
+
+### T14 — Fingering optimizer (TS)
+
+**Why:** every MIDI note has 5+ valid `(string, fret)` placements; we need to pick the playable one.
+
+Build:
+
+- `src/tab/optimizer.ts`. Inputs: `BassNote[]`, `{tuning, octaveShift, maxFret, stringBias}`. Output: `TabNote[]` (`{pitch, startSec, durSec, string, fret}`).
+- DP over notes: state = current hand position (lowest fret of last placement), transition cost = `|fret - prevFret| + stringSwitchPenalty + distFromPreferredRegion`. Default tuning `[E1, A1, D2, G2]`.
+- Pure module (no React); vitest covers a handful of synthetic riffs with known optimal placements.
+
+**Acceptance:**
+
+- Synthetic ascending E-string scale → all on E.
+- Octave jumps → optimizer picks the closer string when one is available.
+- Re-running with a different `octaveShift` re-fingers in <100 ms for a 4-min song.
+
+---
+
+### T15 — Tab SVG renderer
+
+**Why:** the practice value is the visual tab.
+
+Build:
+
+- `src/tab/render.ts`: pure layout helpers (note → x/y in SVG units).
+- `src/components/Tab.tsx`: SVG with 4 horizontal lines (g/D/A/E top→bottom), bar lines from `beats.json`, fret numbers on the appropriate line, simple rhythm beams below, playhead line driven by `engine.getCurrentTime()`.
+- For now: bar numbers only. No section labels, no repeat brackets (Phase 3).
+- Auto-scrolls to keep the playhead visible.
+
+**Acceptance:**
+
+- A processed song shows a tab that visually lines up with audible bass entrances.
+- Playhead stays within ±1 frame of `engine.getCurrentTime()` during playback and after seek.
+- Re-rendering after a parameter slider change is <100 ms.
+
+---
+
+### T16 — Split layout (Player ↔ Tab)
+
+**Why:** the tab needs real estate and shouldn't compete with the transport.
+
+Build:
+
+- PlayerScreen swaps to a 2-column layout: narrow left (transport, tempo, A-B, mixer, sidecar status) + wide right (Tab).
+- The piano-roll moves into a hidden "Debug" toggle (kept for now; deletable later).
+- Container max-width relaxes; `min-width` on the tab side so the SVG never clips.
+
+**Acceptance:**
+
+- 1100 × 720 (default Tauri window) shows transport + tab without horizontal scroll.
+- Resizing the window keeps both panes visible down to ~900 px wide.
+
+---
+
+### T17 — MIDI playback (Tone.js soft-synth)
+
+**Why:** hear what the transcription thinks the bassline is, in isolation, at any tempo.
+
+Build:
+
+- `src/audio/midi-synth.ts`: thin wrapper around `Tone.MonoSynth` (or a sample-based `Sampler` with a single bass sample) driven by `BassNote[]`.
+- New transport mode: _Audio_ / _MIDI_ / _Both_. The synth plays in lockstep with `StemEngine.getCurrentTime`; tempo slider scales playback rate (no DSP needed — `Tone.Transport.bpm` or per-note schedule).
+- Respects A-B loop via `tickLoop`.
+
+**Acceptance:**
+
+- _MIDI_ mode plays a recognizable bassline through speakers without any audio stems active.
+- _Both_ mode keeps the synth in sync with the audio stems within ±50 ms across 30 s of playback.
+- Tempo at 50% slows both audio + synth together.
+
+---
+
+### T18 — Rhythm notation + bar polish
+
+**Why:** the reference image needs eighth-note beams, ties, dotted notes — not just naked fret numbers.
+
+Build:
+
+- Beam consecutive ≤8th-notes within a beat.
+- Tie notes that span a beat boundary.
+- Time-signature header + tempo header (`♩ = 120` from `beats.json`).
+
+**Acceptance:**
+
+- A simple riff renders with the correct beaming pattern at 120 BPM.
+- The "Intro / Riff A / 3×" annotations from the reference image are explicitly **deferred** to Phase 3.
+
+---
+
+# Phase 3 Implementation Plan
+
+### T19 — Click-to-edit per-note popover
+
+Click any tab note → Park `Popover` with: alternate `(string, fret)` choices for that pitch (the optimizer already enumerated them), octave ± buttons, delete.
+
+### T20 — Edits persistence + overlay rendering
+
+- `library/<id>/bass.tab.edits.json`: list of `{noteId, kind: "replace"|"delete"|"add", ...}`. Note ids derived from MIDI ordering + start time so they survive optimizer re-runs.
+- Render = optimizer output + edits applied last.
+- Re-running the optimizer keeps edits whose note still exists.
+
+### T21 — Add note + section labels + repeats
+
+- Click empty space at a beat → add a note. Pitch from a popover (default to last picked).
+- Section labels: name a region between two A-B-C marks. Optional repeat count. These are the _Intro (Riff A) · 3×_ annotations from the reference image.
