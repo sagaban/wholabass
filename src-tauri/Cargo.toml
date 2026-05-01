@@ -11,18 +11,18 @@ name = "wholabass_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
-tauri-build = { version = "2.0.3", features = [] }
+tauri-build = { version = "2.6", features = [] }
 
 [dependencies]
-tauri = { version = "2.1", features = [] }
-tauri-plugin-shell = "2.0"
-tauri-plugin-dialog = "2.0"
+tauri = { version = "2.11", features = [] }
+tauri-plugin-shell = "2.3"
+tauri-plugin-dialog = "2.7"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-sha2 = "0.10"
+sha2 = "0.11"
 url = "2.5"
 hex = "0.4"
-thiserror = "1"
+thiserror = "2"
 anyhow = "1"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "process", "io-util", "sync", "time"] }
 
