@@ -48,12 +48,53 @@ function clamp(v: number, lo: number, hi: number): number {
   return v < lo ? lo : v > hi ? hi : v;
 }
 
+export type StemFlags = Record<StemName, boolean>;
+export type StemVolumes = Record<StemName, number>;
+
+/**
+ * Per-stem effective gain given user volumes + mute/solo flags.
+ *
+ * Rules:
+ *   - if any stem is soloed: only stems that are soloed AND not muted get
+ *     their own volume; everyone else is forced to 0.
+ *   - else: muted stems → 0; everyone else → their own volume.
+ */
+export function effectiveGain(
+  volumes: StemVolumes,
+  muted: StemFlags,
+  soloed: StemFlags,
+  stem: StemName,
+): number {
+  const anySoloed = STEM_NAMES.some((n) => soloed[n]);
+  if (muted[stem]) return 0;
+  if (anySoloed && !soloed[stem]) return 0;
+  return clamp(volumes[stem], 0, 1);
+}
+
+const RAMP_SECONDS = 0.01;
+
+const ZERO_FLAGS: StemFlags = {
+  vocals: false,
+  drums: false,
+  bass: false,
+  other: false,
+};
+const FULL_VOLUMES: StemVolumes = {
+  vocals: 1,
+  drums: 1,
+  bass: 1,
+  other: 1,
+};
+
 export class StemEngine {
   private readonly ctx: AudioContext;
   private buffers: StemBuffers | null = null;
   private sources: Partial<Record<StemName, AudioBufferSourceNode>> = {};
   private gains: Partial<Record<StemName, GainNode>> = {};
   private state: EngineState = { kind: "stopped" };
+  private volumes: StemVolumes = { ...FULL_VOLUMES };
+  private muted: StemFlags = { ...ZERO_FLAGS };
+  private soloed: StemFlags = { ...ZERO_FLAGS };
 
   constructor(ctx: AudioContext) {
     this.ctx = ctx;
@@ -66,10 +107,48 @@ export class StemEngine {
     for (const name of STEM_NAMES) {
       if (!this.gains[name]) {
         const g = this.ctx.createGain();
-        g.gain.value = 1.0;
+        g.gain.value = effectiveGain(this.volumes, this.muted, this.soloed, name);
         g.connect(this.ctx.destination);
         this.gains[name] = g;
       }
+    }
+  }
+
+  setVolume(stem: StemName, value: number): void {
+    this.volumes[stem] = clamp(value, 0, 1);
+    this.applyMix();
+  }
+
+  setMuted(stem: StemName, on: boolean): void {
+    this.muted[stem] = on;
+    this.applyMix();
+  }
+
+  setSoloed(stem: StemName, on: boolean): void {
+    this.soloed[stem] = on;
+    this.applyMix();
+  }
+
+  getVolume(stem: StemName): number {
+    return this.volumes[stem];
+  }
+
+  isMuted(stem: StemName): boolean {
+    return this.muted[stem];
+  }
+
+  isSoloed(stem: StemName): boolean {
+    return this.soloed[stem];
+  }
+
+  /** Recompute effective gains and ramp every GainNode to its new value. */
+  private applyMix(): void {
+    const target = this.ctx.currentTime + RAMP_SECONDS;
+    for (const name of STEM_NAMES) {
+      const node = this.gains[name];
+      if (!node) continue;
+      const value = effectiveGain(this.volumes, this.muted, this.soloed, name);
+      node.gain.linearRampToValueAtTime(value, target);
     }
   }
 

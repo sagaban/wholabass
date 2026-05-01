@@ -7,6 +7,7 @@ import {
   type StemBuffers,
   type StemName,
 } from "@/audio/engine";
+import { StemMixer } from "@/components/StemMixer";
 
 type LoadStatus =
   | { kind: "loading" }
@@ -140,6 +141,7 @@ export function Player({ songId }: PlayerProps) {
         min={0}
         max={duration}
         step={0.05}
+        aria-label={["seek"]}
       >
         <Slider.Control>
           <Slider.Track>
@@ -150,6 +152,8 @@ export function Player({ songId }: PlayerProps) {
           </Slider.Thumb>
         </Slider.Control>
       </Slider.Root>
+
+      {engineRef.current && <StemMixer engine={engineRef.current} />}
     </div>
   );
 }
