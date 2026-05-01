@@ -11,12 +11,26 @@ demucs pulls in.
 
 from __future__ import annotations
 
+import contextlib
+import logging
+import sys
+import warnings
 from pathlib import Path
 from typing import Any
 
-import basic_pitch
+# Silence chatty coremltools / basic-pitch / resampy noise that fires on
+# import. Must happen before `import basic_pitch`.
+warnings.filterwarnings("ignore", module=r"coremltools(\..*)?")
+warnings.filterwarnings("ignore", message=r".*pkg_resources is deprecated.*")
+warnings.filterwarnings("ignore", message=r".*scikit-learn version .* is not supported.*")
+logging.getLogger("basic_pitch").setLevel(logging.ERROR)
+# basic-pitch logs "Tensorflow not installed" / "tflite-runtime not installed"
+# through the root logger; quiet that down too.
+logging.getLogger().setLevel(logging.ERROR)
 
-import progress
+import basic_pitch  # noqa: E402
+
+import progress  # noqa: E402
 
 ONNX_MODEL_PATH = (
     Path(basic_pitch.__file__).parent / "saved_models" / "icassp_2022" / "nmp.onnx"
@@ -24,10 +38,17 @@ ONNX_MODEL_PATH = (
 
 
 def _run_basic_pitch(audio_path: Path) -> Any:
-    """Returns (model_output, pretty_midi.PrettyMIDI, note_events)."""
+    """Returns (model_output, pretty_midi.PrettyMIDI, note_events).
+
+    basic-pitch prints progress text to stdout, which is exactly the
+    channel our sidecar uses for newline-JSON-RPC. We redirect any
+    stray prints to stderr so the protocol stream stays clean and the
+    user still sees progress in the dev console.
+    """
     from basic_pitch.inference import predict
 
-    return predict(str(audio_path), model_or_model_path=str(ONNX_MODEL_PATH))
+    with contextlib.redirect_stdout(sys.stderr):
+        return predict(str(audio_path), model_or_model_path=str(ONNX_MODEL_PATH))
 
 
 def transcribe_bass(song_id: str, bass_path: Path, out_dir: Path) -> dict[str, Any]:
