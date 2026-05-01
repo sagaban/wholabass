@@ -140,9 +140,9 @@ Phase 1 progress (see [tasks/todo.md](tasks/todo.md)):
 - [x] T2 — Multi-stem synced playback
 - [x] T3 — Stem mixer
 - [x] T4 — Cache short-circuit
-- [ ] T5 — YouTube URL ingest
+- [x] T5 — YouTube URL ingest
 - [ ] T6 — Bass MIDI + piano-roll
 - [ ] T7 — Time-stretch (slow-down)
 - [ ] T8 — A-B loop
 
-Today, dropping a local audio file ingests it through Demucs (or short-circuits to the on-disk cache when stems already exist for the current `PROCESSING_VERSION`), then plays the four stems in sync with master transport (play / pause / seek), per-stem volume + mute / solo, and a master volume. YouTube URL ingest (T5) is the next slice.
+Today, dropping a local audio file or pasting a YouTube URL ingests through yt-dlp (when a URL) and Demucs, with a live stage-mapped progress bar and a Cancel button that respawns the sidecar + wipes the partial. Cached songs short-circuit instantly. The library screen lists processed songs (with delete) and the player has master transport + per-stem volume / mute / solo + master volume. Bass MIDI + piano-roll (T6) is the next slice.
