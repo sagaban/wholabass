@@ -45,6 +45,13 @@ This starts Vite, builds the Tauri shell, opens a window. The Rust shell spawns 
 
 Closing the window terminates the Python sidecar (`kill_on_drop`).
 
+> macOS note: the `tauri` npm script unsets `DYLD_LIBRARY_PATH` before exec.
+> Some Homebrew formulas export it globally, which makes the dyld loader pull
+> Homebrew copies of system libs and crash the WebKit window on open. See
+> [wxWidgets#23547](https://github.com/wxWidgets/wxWidgets/issues/23547) and
+> [Homebrew/discussions/5420](https://github.com/orgs/Homebrew/discussions/5420).
+> If you invoke `tauri` outside pnpm, run `DYLD_LIBRARY_PATH= tauri ...` yourself.
+
 ---
 
 ## Build (production)
