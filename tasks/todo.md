@@ -8,7 +8,7 @@ See [plan.md](plan.md) for full task descriptions, acceptance criteria, and veri
 - [x] T1  — Local file → 4 stems on disk (Demucs)
 - [x] T2  — Multi-stem synced playback (Web Audio, master transport)
 - [x] T3  — Stem mixer (volume + mute/solo)
-- [ ] T4  — Cache short-circuit (skip pipeline on processed songs)
+- [x] T4  — Cache short-circuit (skip pipeline on processed songs)
 - [ ] T5  — YouTube URL ingest (yt-dlp)
 - [ ] T6  — Bass MIDI + piano-roll (basic-pitch + Canvas)
 - [ ] T7  — Time-stretch (Rubberband-wasm or SoundTouch-js)
