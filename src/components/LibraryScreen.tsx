@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Box, HStack, Stack, VStack, styled } from "styled-system/jsx";
 import { Button } from "@/components/ui";
+import { ThemeToggle } from "@/components/ThemeToggle";
 
 export interface LibraryEntry {
   song_id: string;
@@ -54,9 +55,10 @@ export function LibraryScreen({
 
   return (
     <Box as="main" p="8" fontSize="lg">
-      <styled.h1 mt="0" mb="4">
-        wholabass
-      </styled.h1>
+      <HStack justifyContent="space-between" alignItems="center" mb="4">
+        <styled.h1 m="0">wholabass</styled.h1>
+        <ThemeToggle />
+      </HStack>
       {sidecarLine}
 
       <DropZone hovering={hovering} ingest={ingest} />
@@ -138,7 +140,7 @@ function DropZone({ hovering, ingest }: { hovering: boolean; ingest: IngestStatu
       p="8"
       borderWidth="2px"
       borderStyle="dashed"
-      borderColor={hovering ? "iris.9" : "border"}
+      borderColor={hovering ? "indigo.9" : "border"}
       borderRadius="l3"
       textAlign="center"
       opacity={ingest.kind === "running" ? 0.7 : 1}

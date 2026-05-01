@@ -12,6 +12,7 @@ export const globalCss = {
     body: {
       background: 'canvas',
       color: 'fg.default',
+      colorPalette: 'indigo',
     },
   },
 }

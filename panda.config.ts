@@ -1,7 +1,7 @@
+import { indigo } from "@/theme/colors/indigo";
 import { green } from "@/theme/colors/green";
 import { red } from "@/theme/colors/red";
 import { slate } from "@/theme/colors/slate";
-import { iris } from "@/theme/colors/iris";
 import { animationStyles } from "@/theme/animation-styles";
 import { zIndex } from "@/theme/tokens/z-index";
 import { shadows } from "@/theme/tokens/shadows";
@@ -80,10 +80,17 @@ export default defineConfig({
             },
           },
 
-          iris: iris,
+          canvas: {
+            value: {
+              _light: "{colors.gray.1}",
+              _dark: "{colors.gray.1}",
+            },
+          },
+
           gray: slate,
           red: red,
           green: green,
+          indigo: indigo,
         },
 
         shadows: shadows,
