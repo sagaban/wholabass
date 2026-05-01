@@ -74,7 +74,7 @@ pnpm tauri build
 
 Produces a platform binary under `src-tauri/target/release/bundle/`. macOS is the primary target; Windows + Linux should work but are unverified.
 
-> Note: bundle icons in `src-tauri/icons/` are placeholders. Replace before any release. `icon.icns` / `icon.ico` are removed from the bundle config for now.
+> Note: bundle icons in `src-tauri/icons/` are derived from a 256×256 brushstroke source via `iconutil`. The `.icns` covers macOS Dock + Finder up to 1024 px (sizes ≥512 are upscaled, so still slightly soft); drop a higher-res master at `icons/128x128@2x.png` and re-run the icon regen if you want pixel-perfect at every zoom. `icon.ico` for Windows is not generated yet.
 
 ---
 
