@@ -30,6 +30,7 @@ pub struct IngestResult {
     pub out_dir: String,
     pub stems: Vec<String>,
     pub duration_sec: f64,
+    pub cache_hit: bool,
 }
 
 #[tauri::command]
@@ -65,6 +66,18 @@ async fn ingest_file(
     let library_root = library::resolve_root(&app).map_err(|e| e.to_string())?;
     let out_dir =
         library::ensure_song_dir(&library_root, &song_id).map_err(|e| e.to_string())?;
+
+    if library::is_ready(&library_root, &song_id, ids::PROCESSING_VERSION) {
+        let meta = library::read_meta(&library_root, &song_id)
+            .ok_or_else(|| "is_ready=true but read_meta failed".to_string())?;
+        return Ok(IngestResult {
+            song_id,
+            out_dir: out_dir.display().to_string(),
+            stems: library::STEM_NAMES.iter().map(|s| (*s).to_string()).collect(),
+            duration_sec: meta.duration,
+            cache_hit: true,
+        });
+    }
 
     let sc = take_sidecar(&state).await?;
     let resp = sc
@@ -133,6 +146,7 @@ fn parse_separate_response(
         out_dir: out_dir.display().to_string(),
         stems,
         duration_sec,
+        cache_hit: false,
     })
 }
 

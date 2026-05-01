@@ -15,6 +15,7 @@ type IngestResult = {
   out_dir: string;
   stems: string[];
   duration_sec: number;
+  cache_hit: boolean;
 };
 
 type SidecarStatus =
@@ -100,6 +101,9 @@ async function runIngest(
   setIngest({ kind: "running", path });
   try {
     const result = await invoke<IngestResult>("ingest_file", { path });
+    console.log(
+      `ingest ${result.cache_hit ? "cache hit" : "cache miss"}: ${result.song_id} (${result.duration_sec.toFixed(1)}s)`,
+    );
     setIngest({ kind: "ready", result });
   } catch (err: unknown) {
     setIngest({ kind: "error", message: String(err) });
@@ -175,8 +179,17 @@ function IngestLine({ ingest }: { ingest: IngestStatus }) {
         <VStack mt="4" gap="2" alignItems="center">
           <styled.p m="0">
             ready: <styled.code>{ingest.result.song_id}</styled.code> ·{" "}
-            {ingest.result.duration_sec.toFixed(1)}s · stems:{" "}
-            {ingest.result.stems.join(", ")}
+            {ingest.result.duration_sec.toFixed(1)}s ·{" "}
+            <styled.span
+              fontSize="xs"
+              px="1.5"
+              py="0.5"
+              borderRadius="l1"
+              bg={ingest.result.cache_hit ? "green.4" : "iris.4"}
+              color={ingest.result.cache_hit ? "green.12" : "iris.12"}
+            >
+              {ingest.result.cache_hit ? "cache hit" : "fresh"}
+            </styled.span>
           </styled.p>
           <Player songId={ingest.result.song_id} />
         </VStack>
