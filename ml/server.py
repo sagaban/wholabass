@@ -45,12 +45,15 @@ def handle_separate(params: JsonObject) -> JsonObject:
     source_path = Path(_require_str(params, "source_path"))
     out_dir = Path(_require_str(params, "out_dir"))
     processing_version = _require_int(params, "processing_version")
+    title = params.get("title")
+    title_arg = title if isinstance(title, str) and title else None
 
     return separate_song(
         song_id=song_id,
         source_path=source_path,
         out_dir=out_dir,
         processing_version=processing_version,
+        title=title_arg,
     )
 
 

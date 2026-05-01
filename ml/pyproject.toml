@@ -36,3 +36,7 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+filterwarnings = [
+  "ignore:.*'encoding' parameter.*TorchCodec AudioEncoder.*:UserWarning",
+  "ignore:.*'bits_per_sample' parameter.*TorchCodec AudioEncoder.*:UserWarning",
+]

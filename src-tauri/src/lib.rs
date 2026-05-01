@@ -28,6 +28,7 @@ pub struct PingResult {
 #[derive(Debug, Serialize)]
 pub struct IngestResult {
     pub song_id: String,
+    pub title: String,
     pub out_dir: String,
     pub stems: Vec<String>,
     pub duration_sec: f64,
@@ -73,6 +74,7 @@ async fn ingest_file(
             .ok_or_else(|| "is_ready=true but read_meta failed".to_string())?;
         return Ok(IngestResult {
             song_id,
+            title: meta.title,
             out_dir: out_dir.display().to_string(),
             stems: library::STEM_NAMES.iter().map(|s| (*s).to_string()).collect(),
             duration_sec: meta.duration,
@@ -81,7 +83,7 @@ async fn ingest_file(
     }
 
     *state.current_ingest.lock().await = Some(song_id.clone());
-    let result = run_separate(&state, &app, &song_id, &source_path, &out_dir).await;
+    let result = run_separate(&state, &app, &song_id, &source_path, &out_dir, None).await;
     *state.current_ingest.lock().await = None;
     result
 }
@@ -92,20 +94,23 @@ async fn run_separate(
     song_id: &str,
     source_path: &std::path::Path,
     out_dir: &std::path::Path,
+    title: Option<&str>,
 ) -> Result<IngestResult, String> {
     let sc = take_sidecar(state).await?;
     let app_emit = app.clone();
+    let mut params = serde_json::json!({
+        "song_id": song_id,
+        "source_path": source_path.to_string_lossy(),
+        "out_dir": out_dir.to_string_lossy(),
+        "processing_version": ids::PROCESSING_VERSION,
+    });
+    if let Some(t) = title {
+        params["title"] = serde_json::Value::String(t.to_string());
+    }
     let resp = sc
-        .call_with_progress(
-            "separate",
-            serde_json::json!({
-                "song_id": song_id,
-                "source_path": source_path.to_string_lossy(),
-                "out_dir": out_dir.to_string_lossy(),
-                "processing_version": ids::PROCESSING_VERSION,
-            }),
-            |progress, stage| emit_progress(&app_emit, progress, stage),
-        )
+        .call_with_progress("separate", params, |progress, stage| {
+            emit_progress(&app_emit, progress, stage)
+        })
         .await
         .map_err(|e| e.to_string())?;
 
@@ -137,6 +142,7 @@ async fn ingest_url(
         let out_dir = library::song_dir(&library_root, &song_id);
         return Ok(IngestResult {
             song_id,
+            title: meta.title,
             out_dir: out_dir.display().to_string(),
             stems: library::STEM_NAMES.iter().map(|s| (*s).to_string()).collect(),
             duration_sec: meta.duration,
@@ -163,34 +169,26 @@ async fn run_download_and_separate(
     let sc = take_sidecar(state).await?;
     let app_emit = app.clone();
 
-    sc.call_with_progress(
-        "download",
-        serde_json::json!({
-            "song_id": song_id,
-            "url": url,
-            "out_dir": out_dir.to_string_lossy(),
-        }),
-        |progress, stage| emit_progress(&app_emit, progress, stage),
-    )
-    .await
-    .map_err(|e| format!("download: {e}"))?;
-
-    let source_path = out_dir.join("source.wav");
-    let resp = sc
+    let download_resp = sc
         .call_with_progress(
-            "separate",
+            "download",
             serde_json::json!({
                 "song_id": song_id,
-                "source_path": source_path.to_string_lossy(),
+                "url": url,
                 "out_dir": out_dir.to_string_lossy(),
-                "processing_version": ids::PROCESSING_VERSION,
             }),
             |progress, stage| emit_progress(&app_emit, progress, stage),
         )
         .await
-        .map_err(|e| format!("separate: {e}"))?;
+        .map_err(|e| format!("download: {e}"))?;
 
-    parse_separate_response(&resp, song_id, out_dir)
+    let title = download_resp
+        .get("title")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    let source_path = out_dir.join("source.wav");
+    run_separate(state, app, song_id, &source_path, out_dir, title.as_deref()).await
 }
 
 fn emit_progress(app: &AppHandle, progress: f64, stage: &str) {
@@ -289,8 +287,14 @@ fn parse_separate_response(
         .get("duration_sec")
         .and_then(|v| v.as_f64())
         .ok_or_else(|| "separate response missing duration_sec".to_string())?;
+    let title = resp
+        .get("title")
+        .and_then(|v| v.as_str())
+        .unwrap_or(song_id)
+        .to_string();
     Ok(IngestResult {
         song_id: song_id.to_string(),
+        title,
         out_dir: out_dir.display().to_string(),
         stems,
         duration_sec,

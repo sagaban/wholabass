@@ -16,6 +16,7 @@ interface PingResult {
 
 interface IngestResult {
   song_id: string;
+  title: string;
   out_dir: string;
   stems: string[];
   duration_sec: number;
@@ -153,7 +154,7 @@ export function LibraryScreen() {
                 void navigate({
                   to: "/play/$songId",
                   params: { songId: result.song_id },
-                  search: { title: titleFromPath(p.paths[0]) },
+                  search: { title: result.title },
                 });
               },
             );
@@ -191,7 +192,7 @@ export function LibraryScreen() {
             void navigate({
               to: "/play/$songId",
               params: { songId: result.song_id },
-              search: { title: result.song_id },
+              search: { title: result.title },
             });
           })
         }
@@ -301,12 +302,6 @@ async function runIngest(
   } finally {
     ingestingRef.current = false;
   }
-}
-
-function titleFromPath(path: string): string {
-  const base = path.split("/").pop() ?? path;
-  const dot = base.lastIndexOf(".");
-  return dot > 0 ? base.slice(0, dot) : base;
 }
 
 function LibraryRow({
