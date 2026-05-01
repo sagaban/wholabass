@@ -95,9 +95,13 @@ function TabSurface({ tabNotes, beats, engine, durationSec }: TabSurfaceProps) {
     [beats.beats, layout.beatsPerBar],
   );
 
-  // rAF loop: move the playhead and (while playing) keep it visible.
+  // rAF loop: move the playhead and keep it visible.
+  // While playing → hold the playhead at ~25% from the viewport's left edge.
+  // While paused → only nudge if the user seeked the playhead off-screen,
+  // so manual scrolling for inspection isn't fought by the loop.
   useEffect(() => {
     let raf = 0;
+    const margin = 60;
     const tick = () => {
       const t = engine.getCurrentTime();
       const x = timeToX(t, layout);
@@ -107,13 +111,16 @@ function TabSurface({ tabNotes, beats, engine, durationSec }: TabSurfaceProps) {
         playhead.setAttribute("x2", String(x));
       }
       const scroller = scrollRef.current;
-      if (scroller && engine.isPlaying) {
+      if (scroller) {
         const viewport = scroller.clientWidth;
-        const target = Math.max(0, x - viewport * 0.25);
-        // Avoid fighting user-initiated scrolls: only nudge if we're
-        // visibly off-screen.
-        const drift = scroller.scrollLeft - target;
-        if (Math.abs(drift) > 4) scroller.scrollLeft = target;
+        const offsetInView = x - scroller.scrollLeft;
+        const offscreen = offsetInView < margin || offsetInView > viewport - margin;
+        if (engine.isPlaying || offscreen) {
+          const target = Math.max(0, x - viewport * 0.25);
+          if (Math.abs(scroller.scrollLeft - target) > 4) {
+            scroller.scrollLeft = target;
+          }
+        }
       }
       raf = requestAnimationFrame(tick);
     };
