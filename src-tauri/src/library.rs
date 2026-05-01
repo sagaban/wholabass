@@ -100,8 +100,18 @@ pub fn all_stems_present(root: &Path, id: &str) -> bool {
     })
 }
 
+/// `<root>/<id>/bass.mid`.
+pub fn midi_path(root: &Path, id: &str) -> PathBuf {
+    song_dir(root, id).join("bass.mid")
+}
+
+pub fn has_midi(root: &Path, id: &str) -> bool {
+    midi_path(root, id).is_file()
+}
+
 /// True iff the cache for `id` is complete and matches the current
-/// processing version. Used to short-circuit the Demucs pipeline.
+/// processing version. Used to short-circuit the Demucs + transcribe
+/// pipeline. A stale or partial entry returns false so it gets reprocessed.
 pub fn is_ready(root: &Path, id: &str, processing_version: u32) -> bool {
     let Some(meta) = read_meta(root, id) else {
         return false;
@@ -109,7 +119,7 @@ pub fn is_ready(root: &Path, id: &str, processing_version: u32) -> bool {
     if meta.processing_version != processing_version {
         return false;
     }
-    all_stems_present(root, id)
+    all_stems_present(root, id) && has_midi(root, id)
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -136,7 +146,8 @@ pub fn list(root: &Path, processing_version: u32) -> Vec<LibraryEntry> {
             let id = e.file_name().to_string_lossy().into_owned();
             let meta = read_meta(root, &id)?;
             let ready = meta.processing_version == processing_version
-                && all_stems_present(root, &id);
+                && all_stems_present(root, &id)
+                && has_midi(root, &id);
             Some(LibraryEntry {
                 song_id: meta.song_id,
                 title: meta.title,
@@ -223,6 +234,7 @@ mod tests {
         for name in STEM_NAMES {
             std::fs::write(stem_path(root, id, name).unwrap(), b"riff").unwrap();
         }
+        std::fs::write(midi_path(root, id), b"MThd").unwrap();
         let meta = format!(
             r#"{{
   "song_id": "{id}",
@@ -266,6 +278,15 @@ mod tests {
         let root = fresh_temp_root();
         write_complete_cache(&root, "abc", 1);
         assert!(is_ready(&root, "abc", 1));
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn is_ready_false_when_midi_missing() {
+        let root = fresh_temp_root();
+        write_complete_cache(&root, "abc", 1);
+        std::fs::remove_file(midi_path(&root, "abc")).unwrap();
+        assert!(!is_ready(&root, "abc", 1));
         std::fs::remove_dir_all(&root).ok();
     }
 

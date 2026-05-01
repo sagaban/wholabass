@@ -8,6 +8,7 @@ dependencies = [
   "soundfile>=0.13",
   "torchcodec>=0.4",
   "yt-dlp>=2024.5.27",
+  "basic-pitch[onnx]>=0.4.0",
 ]
 
 [dependency-groups]
@@ -30,7 +31,15 @@ strict = true
 files = ["server.py", "progress.py", "pipeline"]
 
 [[tool.mypy.overrides]]
-module = ["demucs.*", "soundfile", "torchaudio", "torchaudio.*"]
+module = [
+  "demucs.*",
+  "soundfile",
+  "torchaudio",
+  "torchaudio.*",
+  "basic_pitch",
+  "basic_pitch.*",
+  "pretty_midi",
+]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

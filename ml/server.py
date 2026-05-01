@@ -67,6 +67,16 @@ def handle_download(params: JsonObject) -> JsonObject:
     return download_song(song_id=song_id, url=url, out_dir=out_dir)
 
 
+def handle_transcribe(params: JsonObject) -> JsonObject:
+    from pipeline.transcribe import transcribe_bass
+
+    song_id = _require_str(params, "song_id")
+    bass_path = Path(_require_str(params, "bass_path"))
+    out_dir = Path(_require_str(params, "out_dir"))
+
+    return transcribe_bass(song_id=song_id, bass_path=bass_path, out_dir=out_dir)
+
+
 def _require_str(params: JsonObject, key: str) -> str:
     value = params.get(key)
     if not isinstance(value, str) or not value:
@@ -85,6 +95,7 @@ HANDLERS: dict[str, Handler] = {
     "ping": handle_ping,
     "separate": handle_separate,
     "download": handle_download,
+    "transcribe": handle_transcribe,
 }
 
 

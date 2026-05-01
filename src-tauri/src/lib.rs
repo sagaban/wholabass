@@ -114,6 +114,21 @@ async fn run_separate(
         .await
         .map_err(|e| e.to_string())?;
 
+    // Chain bass MIDI transcription. Errors here surface to the user but
+    // don't roll back stems — the user can retry.
+    let bass_path = out_dir.join("stems").join("bass.wav");
+    sc.call_with_progress(
+        "transcribe",
+        serde_json::json!({
+            "song_id": song_id,
+            "bass_path": bass_path.to_string_lossy(),
+            "out_dir": out_dir.to_string_lossy(),
+        }),
+        |progress, stage| emit_progress(&app_emit, progress, stage),
+    )
+    .await
+    .map_err(|e| format!("transcribe: {e}"))?;
+
     parse_separate_response(&resp, song_id, out_dir)
 }
 
@@ -256,6 +271,16 @@ async fn read_stem(
     Ok(tauri::ipc::Response::new(bytes))
 }
 
+#[tauri::command]
+async fn read_midi(song_id: String, app: AppHandle) -> Result<tauri::ipc::Response, String> {
+    let library_root = library::resolve_root(&app).map_err(|e| e.to_string())?;
+    let path = library::midi_path(&library_root, &song_id);
+    let bytes = tokio::fs::read(&path)
+        .await
+        .map_err(|e| format!("read {}: {e}", path.display()))?;
+    Ok(tauri::ipc::Response::new(bytes))
+}
+
 async fn take_sidecar(state: &State<'_, AppState>) -> Result<Arc<Sidecar>, String> {
     // The sidecar is spawned in a background task at startup; give it a moment
     // on first call rather than failing immediately if the user is fast.
@@ -332,7 +357,8 @@ pub fn run() {
             cancel_ingest,
             list_library,
             delete_song,
-            read_stem
+            read_stem,
+            read_midi
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

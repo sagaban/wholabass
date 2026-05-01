@@ -4,6 +4,7 @@ import { Box, HStack, VStack, styled } from "styled-system/jsx";
 import { Button, Slider } from "@/components/ui";
 import { StemEngine, STEM_NAMES, type StemBuffers, type StemName } from "@/audio/engine";
 import { StemMixer } from "@/components/StemMixer";
+import { PianoRoll } from "@/components/PianoRoll";
 
 type LoadStatus = { kind: "loading" } | { kind: "ready" } | { kind: "error"; message: string };
 
@@ -141,6 +142,7 @@ export function Player({ songId }: PlayerProps) {
         </Slider.Control>
       </Slider.Root>
 
+      {engineRef.current && <PianoRoll songId={songId} engine={engineRef.current} />}
       {engineRef.current && <StemMixer engine={engineRef.current} />}
     </VStack>
   );
