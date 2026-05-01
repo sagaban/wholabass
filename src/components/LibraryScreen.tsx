@@ -1,8 +1,24 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { useNavigate } from "@tanstack/react-router";
 import { Box, HStack, Stack, VStack, styled } from "styled-system/jsx";
 import { Button } from "@/components/ui";
 import { ThemeToggle } from "@/components/ThemeToggle";
+
+interface PingResult {
+  ok: boolean;
+  timestamp: number;
+  processing_version: number;
+}
+
+interface IngestResult {
+  song_id: string;
+  out_dir: string;
+  stems: string[];
+  duration_sec: number;
+  cache_hit: boolean;
+}
 
 export interface LibraryEntry {
   song_id: string;
@@ -13,45 +29,98 @@ export interface LibraryEntry {
   ready: boolean;
 }
 
+type SidecarStatus =
+  | { kind: "idle" }
+  | { kind: "loading" }
+  | { kind: "ok"; ping: PingResult }
+  | { kind: "error"; message: string };
+
 type IngestStatus =
   | { kind: "idle" }
   | { kind: "running"; path: string }
   | { kind: "error"; message: string };
 
-interface LibraryScreenProps {
-  hovering: boolean;
-  ingest: IngestStatus;
-  refreshKey: number;
-  sidecarLine: React.ReactNode;
-  onPick: (entry: { songId: string; title: string }) => void;
-}
-
-export function LibraryScreen({
-  hovering,
-  ingest,
-  refreshKey,
-  sidecarLine,
-  onPick,
-}: LibraryScreenProps) {
+export function LibraryScreen() {
+  const navigate = useNavigate();
+  const [sidecar, setSidecar] = useState<SidecarStatus>({ kind: "idle" });
+  const [ingest, setIngest] = useState<IngestStatus>({ kind: "idle" });
+  const [hovering, setHovering] = useState(false);
+  const [refreshKey, setRefreshKey] = useState(0);
   const [entries, setEntries] = useState<LibraryEntry[] | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [listError, setListError] = useState<string | null>(null);
+  const ingestingRef = useRef(false);
 
+  // Sidecar ping (once on mount).
+  useEffect(() => {
+    let cancelled = false;
+    setSidecar({ kind: "loading" });
+    invoke<PingResult>("ping")
+      .then((ping) => {
+        if (!cancelled) setSidecar({ kind: "ok", ping });
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) setSidecar({ kind: "error", message: String(err) });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Library list — refetch when refreshKey bumps.
   useEffect(() => {
     let cancelled = false;
     invoke<LibraryEntry[]>("list_library")
       .then((rows) => {
         if (!cancelled) {
           setEntries(rows);
-          setError(null);
+          setListError(null);
         }
       })
       .catch((err: unknown) => {
-        if (!cancelled) setError(String(err));
+        if (!cancelled) setListError(String(err));
       });
     return () => {
       cancelled = true;
     };
   }, [refreshKey]);
+
+  // Drag-drop — only mounted while this screen is alive.
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let mounted = true;
+    getCurrentWebview()
+      .onDragDropEvent((event) => {
+        const p = event.payload;
+        if (p.type === "enter" || p.type === "over") {
+          setHovering(true);
+        } else if (p.type === "leave") {
+          setHovering(false);
+        } else if (p.type === "drop") {
+          setHovering(false);
+          if (!ingestingRef.current && p.paths.length > 0) {
+            void runIngest(p.paths[0], setIngest, ingestingRef, (result) => {
+              setRefreshKey((k) => k + 1);
+              void navigate({
+                to: "/play/$songId",
+                params: { songId: result.song_id },
+                search: { title: titleFromPath(p.paths[0]) },
+              });
+            });
+          }
+        }
+      })
+      .then((fn) => {
+        if (!mounted) fn();
+        else unlisten = fn;
+      })
+      .catch((err: unknown) => {
+        console.error("drag-drop listener failed:", err);
+      });
+    return () => {
+      mounted = false;
+      unlisten?.();
+    };
+  }, [navigate]);
 
   return (
     <Box as="main" p="8" fontSize="lg">
@@ -59,7 +128,7 @@ export function LibraryScreen({
         <styled.h1 m="0">wholabass</styled.h1>
         <ThemeToggle />
       </HStack>
-      {sidecarLine}
+      <SidecarLine status={sidecar} />
 
       <DropZone hovering={hovering} ingest={ingest} />
 
@@ -67,37 +136,71 @@ export function LibraryScreen({
         Library
       </styled.h2>
 
-      {error && (
+      {listError && (
         <styled.p color="error" m="0">
-          list error: {error}
+          list error: {listError}
         </styled.p>
       )}
 
-      {!error && entries === null && (
+      {!listError && entries === null && (
         <styled.p opacity="0.7" m="0">
           loading library...
         </styled.p>
       )}
 
-      {!error && entries !== null && entries.length === 0 && (
+      {!listError && entries !== null && entries.length === 0 && (
         <styled.p opacity="0.7" m="0">
           No songs yet — drop a file above to get started.
         </styled.p>
       )}
 
-      {!error && entries !== null && entries.length > 0 && (
+      {!listError && entries !== null && entries.length > 0 && (
         <Stack gap="1.5">
           {entries.map((entry) => (
             <LibraryRow
               key={entry.song_id}
               entry={entry}
-              onClick={() => onPick({ songId: entry.song_id, title: entry.title })}
+              onClick={() =>
+                void navigate({
+                  to: "/play/$songId",
+                  params: { songId: entry.song_id },
+                  search: { title: entry.title },
+                })
+              }
             />
           ))}
         </Stack>
       )}
     </Box>
   );
+}
+
+async function runIngest(
+  path: string,
+  setIngest: (s: IngestStatus) => void,
+  ingestingRef: React.MutableRefObject<boolean>,
+  onReady: (result: IngestResult) => void,
+): Promise<void> {
+  ingestingRef.current = true;
+  setIngest({ kind: "running", path });
+  try {
+    const result = await invoke<IngestResult>("ingest_file", { path });
+    console.log(
+      `ingest ${result.cache_hit ? "cache hit" : "cache miss"}: ${result.song_id} (${result.duration_sec.toFixed(1)}s)`,
+    );
+    setIngest({ kind: "idle" });
+    onReady(result);
+  } catch (err: unknown) {
+    setIngest({ kind: "error", message: String(err) });
+  } finally {
+    ingestingRef.current = false;
+  }
+}
+
+function titleFromPath(path: string): string {
+  const base = path.split("/").pop() ?? path;
+  const dot = base.lastIndexOf(".");
+  return dot > 0 ? base.slice(0, dot) : base;
 }
 
 function LibraryRow({ entry, onClick }: { entry: LibraryEntry; onClick: () => void }) {
@@ -166,6 +269,32 @@ function IngestLine({ ingest }: { ingest: IngestStatus }) {
       return (
         <styled.p mt="4" color="error">
           error: {ingest.message}
+        </styled.p>
+      );
+  }
+}
+
+function SidecarLine({ status }: { status: SidecarStatus }) {
+  switch (status.kind) {
+    case "idle":
+    case "loading":
+      return (
+        <styled.p opacity="0.7" m="0" fontSize="sm">
+          sidecar: starting...
+        </styled.p>
+      );
+    case "ok": {
+      const ts = new Date(status.ping.timestamp * 1000).toISOString();
+      return (
+        <styled.p m="0" fontSize="sm" opacity="0.7">
+          sidecar: ok ({ts}) · processing v{status.ping.processing_version}
+        </styled.p>
+      );
+    }
+    case "error":
+      return (
+        <styled.p color="error" m="0" fontSize="sm">
+          sidecar error: {status.message}
         </styled.p>
       );
   }
