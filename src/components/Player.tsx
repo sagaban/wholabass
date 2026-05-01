@@ -47,20 +47,14 @@ export function Player({ songId }: PlayerProps) {
     setPosition(0);
 
     void (async () => {
-      const overall = performance.now();
       try {
-        let t = performance.now();
         if (!ctxRef.current) {
           ctxRef.current = new AudioContext();
         }
         const ctx = ctxRef.current;
-        logPhase("audio-context", t);
-
-        t = performance.now();
         // Idempotent: addModule on the same URL is a no-op for subsequent
         // engine instances on the same context.
         await SoundTouchNode.register(ctx, processorUrl);
-        logPhase("worklet-register", t);
 
         if (!engineRef.current) {
           engineRef.current = new StemEngine(
@@ -69,18 +63,13 @@ export function Player({ songId }: PlayerProps) {
           );
         }
 
-        t = performance.now();
         const buffers = await loadStemBuffers(ctx, songId);
-        logPhase("load-stems-total", t);
         if (cancelled) return;
 
-        t = performance.now();
         const engine = engineRef.current;
         engine.load(buffers);
-        logPhase("engine.load", t);
         setDuration(engine.duration);
         setLoad({ kind: "ready" });
-        logPhase("ready (overall)", overall);
       } catch (err: unknown) {
         if (!cancelled) {
           setLoad({ kind: "error", message: String(err) });
@@ -291,10 +280,6 @@ export function Player({ songId }: PlayerProps) {
   );
 }
 
-function logPhase(label: string, start: number): void {
-  console.log(`[player] ${label}: ${(performance.now() - start).toFixed(1)}ms`);
-}
-
 // Cache decoded stems across navigations + StrictMode replays. Bounded to a
 // few entries so RAM usage stays in check (a 4-min song is ~170 MB decoded).
 const BUFFERS_CACHE_LIMIT = 3;
@@ -313,15 +298,9 @@ function rememberBuffers(songId: string, buffers: StemBuffers): void {
 
 async function loadStemBuffers(ctx: AudioContext, songId: string): Promise<StemBuffers> {
   const cached = buffersCache.get(songId);
-  if (cached) {
-    console.log(`[player] stem cache hit: ${songId}`);
-    return cached;
-  }
+  if (cached) return cached;
   const existing = inFlight.get(songId);
-  if (existing) {
-    console.log(`[player] stem load in-flight: ${songId}`);
-    return existing;
-  }
+  if (existing) return existing;
   const promise = (async () => {
     const entries = await Promise.all(
       STEM_NAMES.map(async (stem) => [stem, await loadStem(ctx, songId, stem)] as const),
@@ -342,17 +321,9 @@ async function loadStemBuffers(ctx: AudioContext, songId: string): Promise<StemB
 }
 
 async function loadStem(ctx: AudioContext, songId: string, stem: StemName): Promise<AudioBuffer> {
-  const tFetch = performance.now();
   const bytes = await invoke<ArrayBuffer>("read_stem", { songId, stem });
-  const fetchMs = performance.now() - tFetch;
   // decodeAudioData detaches the input buffer on some platforms; copy to be safe.
-  const tDecode = performance.now();
-  const buf = await ctx.decodeAudioData(bytes.slice(0));
-  const decodeMs = performance.now() - tDecode;
-  console.log(
-    `[player] stem ${stem}: fetch ${fetchMs.toFixed(1)}ms (${(bytes.byteLength / 1e6).toFixed(1)}MB) · decode ${decodeMs.toFixed(1)}ms`,
-  );
-  return buf;
+  return ctx.decodeAudioData(bytes.slice(0));
 }
 
 function fmtTime(seconds: number): string {
