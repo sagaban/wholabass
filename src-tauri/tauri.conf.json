@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "wholabass",
+  "productName": "Wholabass",
   "version": "0.1.0",
   "identifier": "com.santiagobandiera.wholabass",
   "build": {
@@ -12,7 +12,7 @@
   "app": {
     "windows": [
       {
-        "title": "wholabass",
+        "title": "Wholabass",
         "width": 1100,
         "height": 720,
         "resizable": true,

@@ -1,4 +1,4 @@
-# wholabass
+# Wholabass
 
 Bass-practice desktop app. YouTube URL or local audio file → 4-stem separation → multi-channel player with per-stem volume → bass piano-roll synced to playback → slow-down + A-B loop.
 
