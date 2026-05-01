@@ -145,7 +145,9 @@ def separate_song(
     stems_dir = out_dir / "stems"
     stems_dir.mkdir(exist_ok=True)
 
-    progress.emit(0.0, "loading_model")
+    from pipeline.models import is_demucs_ready
+
+    progress.emit(0.0, "downloading_model" if not is_demucs_ready() else "loading_model")
     model = _load_model()
 
     progress.emit(5.0, "loading_source")

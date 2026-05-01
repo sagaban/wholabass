@@ -57,6 +57,10 @@ interface IngestProgress {
   startedAt: number;
 }
 
+interface ModelsStatus {
+  demucs_ready: boolean;
+}
+
 export function LibraryScreen() {
   const navigate = useNavigate();
   const [sidecar, setSidecar] = useState<SidecarStatus>({ kind: "idle" });
@@ -68,6 +72,7 @@ export function LibraryScreen() {
   const [progress, setProgress] = useState<IngestProgress | null>(null);
   const [pendingDelete, setPendingDelete] = useState<LibraryEntry | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [modelsReady, setModelsReady] = useState<boolean | null>(null);
   const ingestingRef = useRef(false);
 
   // Sidecar ping (once on mount).
@@ -85,6 +90,22 @@ export function LibraryScreen() {
       cancelled = true;
     };
   }, []);
+
+  // Probe model status once on mount (and again after each ingest finishes,
+  // since a fresh-install ingest will populate the cache).
+  useEffect(() => {
+    let cancelled = false;
+    invoke<ModelsStatus>("models_status")
+      .then((s) => {
+        if (!cancelled) setModelsReady(s.demucs_ready);
+      })
+      .catch(() => {
+        // Silent; the banner just won't appear if the probe fails.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [refreshKey]);
 
   // Library list — refetch when refreshKey bumps.
   useEffect(() => {
@@ -184,6 +205,8 @@ export function LibraryScreen() {
         <ThemeToggle />
       </HStack>
       <SidecarLine status={sidecar} />
+
+      {modelsReady === false && <ModelsBanner />}
 
       <DropZone hovering={hovering} ingest={ingest} />
 
@@ -478,10 +501,13 @@ const STAGE_LABELS: Record<string, string> = {
   starting: "Starting…",
   downloading: "Downloading from YouTube",
   download_error: "Download failed — retrying",
+  downloading_model: "Downloading separation model (~80 MB, one time)",
   loading_model: "Loading separation model",
   loading_source: "Loading audio",
   separating: "Separating stems",
   writing_stems: "Writing stem files",
+  transcribing: "Transcribing bass to MIDI",
+  transcribed: "Bass MIDI ready",
   done: "Finishing up",
 };
 
@@ -490,11 +516,17 @@ const STAGE_RANGES: Record<string, [number, number]> = {
   starting: [0, 3],
   downloading: [3, 50],
   download_error: [3, 3],
+  // First-run model fetch sits in the same band as loading_model — there's
+  // no real percent to show during torch.hub's download, so the bar parks
+  // here while the pulsing dot covers liveness.
+  downloading_model: [50, 55],
   loading_model: [50, 55],
   loading_source: [55, 58],
   separating: [58, 90],
-  writing_stems: [90, 98],
-  done: [98, 100],
+  writing_stems: [90, 95],
+  transcribing: [95, 99],
+  transcribed: [99, 100],
+  done: [99, 100],
 };
 
 function overallPercent(stage: string, stagePct: number): number {
@@ -568,6 +600,24 @@ function IngestProgressBar({
           style={{ width: `${pct}%` }}
         />
       </Box>
+    </Box>
+  );
+}
+
+function ModelsBanner() {
+  return (
+    <Box
+      mt="3"
+      p="3"
+      borderWidth="1px"
+      borderColor="indigo.7"
+      borderRadius="l2"
+      bg="indigo.3"
+      color="indigo.12"
+      fontSize="sm"
+    >
+      The bass-separation model isn't on disk yet — the first ingest will download about 80 MB and
+      cache it. Subsequent songs are instant.
     </Box>
   );
 }

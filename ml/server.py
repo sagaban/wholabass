@@ -87,6 +87,12 @@ def handle_transcribe(params: JsonObject) -> JsonObject:
     return transcribe_bass(song_id=song_id, bass_path=bass_path, out_dir=out_dir)
 
 
+def handle_models(_params: JsonObject) -> JsonObject:
+    from pipeline.models import is_demucs_ready
+
+    return {"demucs_ready": is_demucs_ready()}
+
+
 def _require_str(params: JsonObject, key: str) -> str:
     value = params.get(key)
     if not isinstance(value, str) or not value:
@@ -106,6 +112,7 @@ HANDLERS: dict[str, Handler] = {
     "separate": handle_separate,
     "download": handle_download,
     "transcribe": handle_transcribe,
+    "models": handle_models,
 }
 
 

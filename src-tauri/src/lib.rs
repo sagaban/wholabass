@@ -26,6 +26,11 @@ pub struct PingResult {
 }
 
 #[derive(Debug, Serialize)]
+pub struct ModelsStatus {
+    pub demucs_ready: bool,
+}
+
+#[derive(Debug, Serialize)]
 pub struct IngestResult {
     pub song_id: String,
     pub title: String,
@@ -211,6 +216,20 @@ fn emit_progress(app: &AppHandle, progress: f64, stage: &str) {
         "ingest:progress",
         serde_json::json!({ "progress": progress, "stage": stage }),
     );
+}
+
+#[tauri::command]
+async fn models_status(state: State<'_, AppState>) -> Result<ModelsStatus, String> {
+    let sc = take_sidecar(&state).await?;
+    let resp = sc
+        .call("models", serde_json::json!({}))
+        .await
+        .map_err(|e| e.to_string())?;
+    let demucs_ready = resp
+        .get("demucs_ready")
+        .and_then(|v| v.as_bool())
+        .ok_or_else(|| "models response missing demucs_ready".to_string())?;
+    Ok(ModelsStatus { demucs_ready })
 }
 
 #[tauri::command]
@@ -450,7 +469,8 @@ pub fn run() {
             list_library,
             delete_song,
             read_stem,
-            read_midi
+            read_midi,
+            models_status
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
