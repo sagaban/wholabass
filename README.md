@@ -27,11 +27,23 @@ rustup-init -y
 ## Install
 
 ```sh
-pnpm install                 # JS deps
+pnpm install                 # JS deps; auto-runs `panda codegen` (prepare hook)
 cd ml && uv sync && cd ..    # Python sidecar deps + venv
 ```
 
 The first `cargo build` downloads Rust crates automatically.
+
+The frontend uses **Panda CSS + Park UI**. `pnpm install` regenerates `styled-system/` (gitignored). To add a Park UI component:
+
+```sh
+pnpm dlx @park-ui/cli add <name>     # e.g. dialog, tooltip, tabs
+```
+
+To regen after editing `src/theme/` or `panda.config.ts`:
+
+```sh
+pnpm exec panda codegen
+```
 
 ---
 
@@ -87,16 +99,25 @@ The cargo integration test in `src-tauri/tests/sidecar_ping.rs` actually spawns 
 ```
 wholabass/
 ├── SPEC.md             design + boundaries
+├── CLAUDE.md           agent instructions (pointers + conventions)
 ├── tasks/              plan.md, todo.md
-├── src/                React frontend (App.tsx, audio engine later)
+├── panda.config.ts     Panda CSS / Park UI config
+├── components.json     Park UI CLI config
+├── src/                React frontend
+│   ├── App.tsx         drag-drop ingest + sidecar ping
+│   ├── components/ui/  Park UI components (copy-paste; not npm)
+│   └── theme/          Park UI tokens / recipes / colors
 ├── src-tauri/          Rust shell (Tauri 2)
 │   ├── src/ids.rs      song-id helpers (sha256, YouTube URL parsing)
 │   ├── src/ipc.rs      JSON-RPC stdio client to the Python sidecar
-│   └── src/lib.rs      Tauri setup + commands (`ping` for now)
+│   ├── src/library.rs  app_data_dir/library/<id>/ resolver
+│   └── src/lib.rs      Tauri setup + commands (`ping`, `ingest_file`)
 ├── ml/                 Python sidecar (managed by uv)
 │   ├── server.py       newline-JSON-RPC stdio loop
+│   ├── pipeline/       Demucs separation, etc.
 │   └── tests/
-└── library/            user data (gitignored): downloads, stems, MIDI
+├── styled-system/      Panda CSS output — gitignored, regenerated
+└── library/            user data — gitignored: source.wav, stems, meta.json
 ```
 
 The sidecar protocol is one JSON object per line over stdio:
@@ -113,7 +134,7 @@ The sidecar protocol is one JSON object per line over stdio:
 Phase 1 progress (see [tasks/todo.md](tasks/todo.md)):
 
 - [x] T0 — Foundation scaffold (Tauri + React + TS + Python sidecar)
-- [ ] T1 — Local file → 4 stems on disk (Demucs)
+- [x] T1 — Local file → 4 stems on disk (Demucs)
 - [ ] T2 — Multi-stem synced playback
 - [ ] T3 — Stem mixer
 - [ ] T4 — Cache short-circuit
@@ -122,4 +143,4 @@ Phase 1 progress (see [tasks/todo.md](tasks/todo.md)):
 - [ ] T7 — Time-stretch (slow-down)
 - [ ] T8 — A-B loop
 
-Today, the app boots, the Python sidecar starts, and `ping` round-trips. Nothing else does anything yet.
+Today, dropping a local audio file ingests it through Demucs and lands `source.wav` + 4 stems + `meta.json` under `~/Library/Application Support/<bundle-id>/library/<song-id>/`. Playback is the next slice.
