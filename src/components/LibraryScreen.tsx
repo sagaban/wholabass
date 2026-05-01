@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { useNavigate } from "@tanstack/react-router";
 import { Box, HStack, Stack, VStack, styled } from "styled-system/jsx";
+import logoUrl from "@/assets/logo.png";
 import { Button } from "@/components/ui";
 import { ThemeToggle } from "@/components/ThemeToggle";
 
@@ -125,7 +126,7 @@ export function LibraryScreen() {
   return (
     <Box as="main" p="8" fontSize="lg" maxWidth="3xl" mx="auto" w="full">
       <HStack justifyContent="space-between" alignItems="center" mb="4">
-        <styled.h1 m="0">Wholabass</styled.h1>
+        <styled.img src={logoUrl} alt="wholabass" h="12" w="auto" />
         <ThemeToggle />
       </HStack>
       <SidecarLine status={sidecar} />
