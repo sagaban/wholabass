@@ -91,10 +91,12 @@ export class StemEngine {
   private buffers: StemBuffers | null = null;
   private sources: Partial<Record<StemName, AudioBufferSourceNode>> = {};
   private gains: Partial<Record<StemName, GainNode>> = {};
+  private master: GainNode | null = null;
   private state: EngineState = { kind: "stopped" };
   private volumes: StemVolumes = { ...FULL_VOLUMES };
   private muted: StemFlags = { ...ZERO_FLAGS };
   private soloed: StemFlags = { ...ZERO_FLAGS };
+  private masterVolume = 1;
 
   constructor(ctx: AudioContext) {
     this.ctx = ctx;
@@ -104,6 +106,12 @@ export class StemEngine {
     this.stopSources();
     this.buffers = buffers;
     this.state = { kind: "stopped" };
+    if (!this.master) {
+      const m = this.ctx.createGain();
+      m.gain.setValueAtTime(this.masterVolume, this.ctx.currentTime);
+      m.connect(this.ctx.destination);
+      this.master = m;
+    }
     for (const name of STEM_NAMES) {
       if (!this.gains[name]) {
         const g = this.ctx.createGain();
@@ -113,7 +121,7 @@ export class StemEngine {
           effectiveGain(this.volumes, this.muted, this.soloed, name),
           this.ctx.currentTime,
         );
-        g.connect(this.ctx.destination);
+        g.connect(this.master);
         this.gains[name] = g;
       }
     }
@@ -122,6 +130,19 @@ export class StemEngine {
   setVolume(stem: StemName, value: number): void {
     this.volumes[stem] = clamp(value, 0, 1);
     this.applyMix();
+  }
+
+  setMasterVolume(value: number): void {
+    this.masterVolume = clamp(value, 0, 1);
+    if (!this.master) return;
+    const now = this.ctx.currentTime;
+    this.master.gain.cancelScheduledValues(now);
+    this.master.gain.setValueAtTime(this.master.gain.value, now);
+    this.master.gain.linearRampToValueAtTime(this.masterVolume, now + RAMP_SECONDS);
+  }
+
+  getMasterVolume(): number {
+    return this.masterVolume;
   }
 
   setMuted(stem: StemName, on: boolean): void {

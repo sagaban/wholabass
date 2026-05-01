@@ -228,16 +228,22 @@ describe("StemEngine mixer setters", () => {
     const ctx = new FakeAudioContext();
     const engine = new StemEngine(ctx as unknown as AudioContext);
     engine.load(makeBuffers(100));
-    // 4 gain nodes, one per stem, in STEM_NAMES order.
-    return { ctx, engine, gains: ctx.allGains };
+    // load() creates the master gain first, then one per stem in STEM_NAMES
+    // order. So allGains is [master, vocals, drums, bass, other].
+    return {
+      ctx,
+      engine,
+      gains: ctx.allGains,
+      stemGains: ctx.allGains.slice(1),
+    };
   }
 
   test("setVolume ramps the matching GainNode toward the new value", () => {
-    const { ctx, engine, gains } = setup();
+    const { ctx, engine, stemGains } = setup();
     ctx.currentTime = 5;
     engine.setVolume("bass", 0.2);
     // bass is the 3rd entry in STEM_NAMES → index 2.
-    const bassGain = gains[2]!;
+    const bassGain = stemGains[2]!;
     const ramp = bassGain.gain.linearRampToValueAtTime;
     expect(ramp).toHaveBeenCalled();
     const lastCall = ramp.mock.calls[ramp.mock.calls.length - 1]!;
@@ -246,9 +252,9 @@ describe("StemEngine mixer setters", () => {
   });
 
   test("setMuted forces gain to 0; unmute restores volume", () => {
-    const { engine, gains } = setup();
+    const { engine, stemGains } = setup();
     engine.setVolume("drums", 0.7);
-    const ramp = gains[1]!.gain.linearRampToValueAtTime;
+    const ramp = stemGains[1]!.gain.linearRampToValueAtTime;
     ramp.mockClear();
 
     engine.setMuted("drums", true);
@@ -261,13 +267,13 @@ describe("StemEngine mixer setters", () => {
   });
 
   test("solo silences the other three stems via ramp", () => {
-    const { engine, gains } = setup();
+    const { engine, stemGains } = setup();
     // Clear initial load() calls.
-    for (const g of gains) g.gain.linearRampToValueAtTime.mockClear();
+    for (const g of stemGains) g.gain.linearRampToValueAtTime.mockClear();
 
     engine.setSoloed("bass", true);
     // bass = idx 2; rest should ramp to 0.
-    const [vocalsRamp, drumsRamp, bassRamp, otherRamp] = gains.map(
+    const [vocalsRamp, drumsRamp, bassRamp, otherRamp] = stemGains.map(
       (g) => g.gain.linearRampToValueAtTime,
     );
     expect(vocalsRamp.mock.calls.at(-1)![0]).toBe(0);
@@ -289,5 +295,26 @@ describe("StemEngine mixer setters", () => {
     expect(engine.isMuted("drums")).toBe(true);
     expect(engine.isSoloed("bass")).toBe(true);
     expect(engine.isMuted("vocals")).toBe(false);
+  });
+
+  test("setMasterVolume clamps and ramps the master gain", () => {
+    const { ctx, engine, gains } = setup();
+    // 4 stem gains created first; master is created in load() before stems.
+    // Order in allGains: master (idx 0), vocals (1), drums (2), bass (3), other (4).
+    const master = gains[0]!;
+
+    ctx.currentTime = 3;
+    engine.setMasterVolume(0.4);
+    let last = master.gain.linearRampToValueAtTime.mock.calls.at(-1)!;
+    expect(last[0]).toBeCloseTo(0.4, 5);
+    expect(last[1]).toBeCloseTo(3 + 0.01, 5);
+
+    engine.setMasterVolume(5); // clamped to 1
+    last = master.gain.linearRampToValueAtTime.mock.calls.at(-1)!;
+    expect(last[0]).toBe(1);
+    expect(engine.getMasterVolume()).toBe(1);
+
+    engine.setMasterVolume(-2); // clamped to 0
+    expect(engine.getMasterVolume()).toBe(0);
   });
 });

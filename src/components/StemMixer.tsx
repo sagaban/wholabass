@@ -21,6 +21,7 @@ export function StemMixer({ engine }: StemMixerProps) {
     bass: INITIAL_STRIP,
     other: INITIAL_STRIP,
   });
+  const [master, setMaster] = useState(1);
 
   const update = (stem: StemName, patch: Partial<StripState>) => {
     setStrips((s) => ({ ...s, [stem]: { ...s[stem], ...patch } }));
@@ -43,6 +44,11 @@ export function StemMixer({ engine }: StemMixerProps) {
     engine.setSoloed(stem, next);
   };
 
+  const onMasterChange = (value: number) => {
+    setMaster(value);
+    engine.setMasterVolume(value);
+  };
+
   return (
     <div
       style={{
@@ -56,6 +62,8 @@ export function StemMixer({ engine }: StemMixerProps) {
         width: "min(540px, 100%)",
       }}
     >
+      <MasterStrip value={master} onChange={onMasterChange} />
+      <hr style={{ border: 0, borderTop: "1px solid #333", margin: "0.25rem 0" }} />
       {STEM_NAMES.map((stem) => (
         <Strip
           key={stem}
@@ -66,6 +74,55 @@ export function StemMixer({ engine }: StemMixerProps) {
           onToggleSolo={() => onToggleSolo(stem)}
         />
       ))}
+    </div>
+  );
+}
+
+function MasterStrip({
+  value,
+  onChange,
+}: {
+  value: number;
+  onChange: (v: number) => void;
+}) {
+  return (
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns: "70px 1fr 36px 70px",
+        alignItems: "center",
+        gap: "0.5rem",
+      }}
+    >
+      <div style={{ fontSize: "0.9rem", fontWeight: 600 }}>Master</div>
+      <Slider.Root
+        value={[value]}
+        onValueChange={(d) => onChange(d.value[0] ?? 0)}
+        min={0}
+        max={1}
+        step={0.01}
+        aria-label={["master volume"]}
+      >
+        <Slider.Control>
+          <Slider.Track>
+            <Slider.Range />
+          </Slider.Track>
+          <Slider.Thumb index={0}>
+            <Slider.HiddenInput />
+          </Slider.Thumb>
+        </Slider.Control>
+      </Slider.Root>
+      <div
+        style={{
+          fontVariantNumeric: "tabular-nums",
+          fontSize: "0.8rem",
+          opacity: 0.7,
+          textAlign: "right",
+        }}
+      >
+        {Math.round(value * 100)}
+      </div>
+      <div />
     </div>
   );
 }

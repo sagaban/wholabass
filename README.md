@@ -136,11 +136,11 @@ Phase 1 progress (see [tasks/todo.md](tasks/todo.md)):
 - [x] T0 — Foundation scaffold (Tauri + React + TS + Python sidecar)
 - [x] T1 — Local file → 4 stems on disk (Demucs)
 - [x] T2 — Multi-stem synced playback
-- [ ] T3 — Stem mixer
+- [x] T3 — Stem mixer
 - [ ] T4 — Cache short-circuit
 - [ ] T5 — YouTube URL ingest
 - [ ] T6 — Bass MIDI + piano-roll
 - [ ] T7 — Time-stretch (slow-down)
 - [ ] T8 — A-B loop
 
-Today, dropping a local audio file ingests it through Demucs and lands `source.wav` + 4 stems + `meta.json` under `~/Library/Application Support/<bundle-id>/library/<song-id>/`, then plays the four stems in sync with master transport (play / pause / seek). Stem mixer (T3) is the next slice.
+Today, dropping a local audio file ingests it through Demucs and lands `source.wav` + 4 stems + `meta.json` under `~/Library/Application Support/<bundle-id>/library/<song-id>/`, then plays the four stems in sync with master transport (play / pause / seek), per-stem volume + mute / solo, and a master volume. Cache short-circuit (T4) is the next slice.
