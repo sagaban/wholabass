@@ -1,8 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { SoundTouchNode } from "@soundtouchjs/audio-worklet";
+// Vite ?url returns the URL of the worklet processor file so it can be
+// loaded into the AudioContext via audioWorklet.addModule(). The package
+// exports `./processor` as the public entry for this file.
+import processorUrl from "@soundtouchjs/audio-worklet/processor?url";
 import { Box, HStack, VStack, styled } from "styled-system/jsx";
 import { Button, Slider } from "@/components/ui";
-import { StemEngine, STEM_NAMES, type StemName, type StemUrls } from "@/audio/engine";
+import { StemEngine, STEM_NAMES, type StemBuffers, type StemName } from "@/audio/engine";
 import { StemMixer } from "@/components/StemMixer";
 import { PianoRoll } from "@/components/PianoRoll";
 
@@ -15,7 +20,6 @@ interface PlayerProps {
 export function Player({ songId }: PlayerProps) {
   const ctxRef = useRef<AudioContext | null>(null);
   const engineRef = useRef<StemEngine | null>(null);
-  const urlsRef = useRef<string[]>([]);
   const [load, setLoad] = useState<LoadStatus>({ kind: "loading" });
   const [position, setPosition] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -35,26 +39,22 @@ export function Player({ songId }: PlayerProps) {
           ctxRef.current = new AudioContext();
         }
         const ctx = ctxRef.current;
+        // Idempotent: addModule on the same URL is a no-op for subsequent
+        // engine instances on the same context.
+        await SoundTouchNode.register(ctx, processorUrl);
+
         if (!engineRef.current) {
-          engineRef.current = new StemEngine(ctx);
+          engineRef.current = new StemEngine(
+            ctx,
+            (c) => new SoundTouchNode(c) as unknown as import("@/audio/engine").StretcherNode,
+          );
         }
 
-        const urls = await loadStemUrls(songId);
-        if (cancelled) {
-          revokeUrls(Object.values(urls));
-          return;
-        }
-
-        // Free the previous song's blob URLs.
-        revokeUrls(urlsRef.current);
-        urlsRef.current = Object.values(urls);
+        const buffers = await loadStemBuffers(ctx, songId);
+        if (cancelled) return;
 
         const engine = engineRef.current;
-        engine.load(urls);
-
-        // HTMLAudioElement reports `duration` only after metadata loads.
-        await waitForDuration(urls.vocals);
-        if (cancelled) return;
+        engine.load(buffers);
         setDuration(engine.duration);
         setLoad({ kind: "ready" });
       } catch (err: unknown) {
@@ -70,14 +70,6 @@ export function Player({ songId }: PlayerProps) {
       if (engine?.isPlaying) engine.pause();
     };
   }, [songId]);
-
-  // Free blob URLs on unmount.
-  useEffect(() => {
-    return () => {
-      revokeUrls(urlsRef.current);
-      urlsRef.current = [];
-    };
-  }, []);
 
   // Drive the position display while playing.
   useEffect(() => {
@@ -108,7 +100,7 @@ export function Player({ songId }: PlayerProps) {
       setPosition(engine.getCurrentTime());
       setIsPlaying(false);
     } else {
-      void engine.play();
+      engine.play();
       setIsPlaying(true);
     }
   };
@@ -209,56 +201,21 @@ export function Player({ songId }: PlayerProps) {
   );
 }
 
-async function loadStemUrls(songId: string): Promise<StemUrls> {
+async function loadStemBuffers(ctx: AudioContext, songId: string): Promise<StemBuffers> {
   const entries = await Promise.all(
-    STEM_NAMES.map(async (stem) => [stem, await loadStemUrl(songId, stem)] as const),
+    STEM_NAMES.map(async (stem) => [stem, await loadStem(ctx, songId, stem)] as const),
   );
-  const out = {} as StemUrls;
-  for (const [name, url] of entries) {
-    out[name] = url;
+  const out = {} as StemBuffers;
+  for (const [name, buf] of entries) {
+    out[name] = buf;
   }
   return out;
 }
 
-async function loadStemUrl(songId: string, stem: StemName): Promise<string> {
+async function loadStem(ctx: AudioContext, songId: string, stem: StemName): Promise<AudioBuffer> {
   const bytes = await invoke<ArrayBuffer>("read_stem", { songId, stem });
-  const blob = new Blob([bytes], { type: "audio/wav" });
-  return URL.createObjectURL(blob);
-}
-
-function revokeUrls(urls: string[]): void {
-  for (const url of urls) {
-    try {
-      URL.revokeObjectURL(url);
-    } catch {
-      // already gone
-    }
-  }
-}
-
-async function waitForDuration(url: string): Promise<void> {
-  // Probe the metadata so engine.duration is non-zero before we hand control
-  // to the UI. The actual <audio> elements inside the engine will load on
-  // their own; this is just a one-off probe.
-  await new Promise<void>((resolve, reject) => {
-    const probe = new Audio();
-    const cleanup = () => {
-      probe.removeEventListener("loadedmetadata", onLoaded);
-      probe.removeEventListener("error", onError);
-    };
-    const onLoaded = () => {
-      cleanup();
-      resolve();
-    };
-    const onError = () => {
-      cleanup();
-      reject(new Error("failed to load audio metadata"));
-    };
-    probe.addEventListener("loadedmetadata", onLoaded);
-    probe.addEventListener("error", onError);
-    probe.preload = "metadata";
-    probe.src = url;
-  });
+  // decodeAudioData detaches the input buffer on some platforms; copy to be safe.
+  return ctx.decodeAudioData(bytes.slice(0));
 }
 
 function fmtTime(seconds: number): string {

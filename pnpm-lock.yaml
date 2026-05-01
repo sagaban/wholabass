@@ -11,6 +11,9 @@ importers:
       '@ark-ui/react':
         specifier: ^5.36.2
         version: 5.36.2(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
+      '@soundtouchjs/audio-worklet':
+        specifier: ^1.0.10
+        version: 1.0.10
       '@tanstack/react-router':
         specifier: ^1.169.1
         version: 1.169.1(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
@@ -732,6 +735,12 @@ packages:
 
   '@rolldown/pluginutils@1.0.0-rc.7':
     resolution: {integrity: sha512-qujRfC8sFVInYSPPMLQByRh7zhwkGFS4+tyMQ83srV1qrxL4g8E2tyxVVyxd0+8QeBM1mIk9KbWxkegRr76XzA==}
+
+  '@soundtouchjs/audio-worklet@1.0.10':
+    resolution: {integrity: sha512-MfMOhcCss1f0L+6MV38AAD3OFF1S8dNGqr1JhjCnt71osCE1saeU0YfF2EpXgjF0wNGeAS2ekNxiZ3UUPq54Dw==}
+
+  '@soundtouchjs/core@1.0.10':
+    resolution: {integrity: sha512-KeifMox5hFxc4hzdHCG96/84JJbZC6wuNiE33FChHcuM/BjFqDcD6Uli5v2K1cw3mchH5K7rIGXJiQSvHvJkWQ==}
 
   '@standard-schema/spec@1.1.0':
     resolution: {integrity: sha512-l2aFy5jALhniG5HgqrD6jXLi/rUWrKvqN/qJx6yoJsgKhblVd+iqqU4RCXavm/jPityDo5TCvKMnpjKnOriy0w==}
@@ -2929,6 +2938,12 @@ snapshots:
   '@rolldown/pluginutils@1.0.0-rc.17': {}
 
   '@rolldown/pluginutils@1.0.0-rc.7': {}
+
+  '@soundtouchjs/audio-worklet@1.0.10':
+    dependencies:
+      '@soundtouchjs/core': 1.0.10
+
+  '@soundtouchjs/core@1.0.10': {}
 
   '@standard-schema/spec@1.1.0': {}
 
