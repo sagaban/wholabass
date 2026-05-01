@@ -10,7 +10,7 @@ See [plan.md](plan.md) for full task descriptions, acceptance criteria, and veri
 - [x] T3 — Stem mixer (volume + mute/solo)
 - [x] T4 — Cache short-circuit (skip pipeline on processed songs)
 - [x] T5 — YouTube URL ingest (yt-dlp)
-- [ ] T6 — Bass MIDI + piano-roll (basic-pitch + Canvas)
+- [x] T6 — Bass MIDI + piano-roll (basic-pitch + Canvas)
 - [ ] T7 — Time-stretch (Rubberband-wasm or SoundTouch-js)
 - [ ] T8 — A-B loop
 
