@@ -142,7 +142,7 @@ Phase 1 progress (see [tasks/todo.md](tasks/todo.md)):
 - [x] T4 — Cache short-circuit
 - [x] T5 — YouTube URL ingest
 - [x] T6 — Bass MIDI + piano-roll
-- [ ] T7 — Time-stretch (slow-down)
+- [x] T7 — Time-stretch (slow-down)
 - [ ] T8 — A-B loop
 
-Today, dropping a local audio file or pasting a YouTube URL ingests through yt-dlp (when a URL), Demucs, and basic-pitch, with a live stage-mapped progress bar and a Cancel button that respawns the sidecar + wipes the partial. Partially-processed songs show step pills (source / stems / midi) and a Retry button that resumes from the missing step. Cached songs short-circuit instantly. The library screen lists processed songs (with delete) and the player has master transport + per-stem volume / mute / solo + master volume + a bass piano-roll synced to the playhead. Time-stretch (T7) is the next slice.
+Today, dropping a local audio file or pasting a YouTube URL ingests through yt-dlp (when a URL), Demucs, and basic-pitch, with a live stage-mapped progress bar and a Cancel button that respawns the sidecar + wipes the partial. Partially-processed songs show step pills (source / stems / midi) and a Retry button that resumes from the missing step. Cached songs short-circuit instantly. The library screen lists processed songs (with delete) and the player has master transport + per-stem volume / mute / solo + master volume + a bass piano-roll synced to the playhead + a 50–100% tempo slider via the SoundTouch AudioWorklet (pitch preserved). A-B loop (T8) is the last critical-path slice before the MVP checkpoint.
