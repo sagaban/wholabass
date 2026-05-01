@@ -13,6 +13,7 @@ T0 only implements `ping`. Pipeline methods land in later tasks.
 from __future__ import annotations
 
 import json
+import os
 import sys
 import time
 import traceback
@@ -26,11 +27,20 @@ JsonObject = dict[str, Any]
 Handler = Callable[[JsonObject], JsonObject]
 
 
+# Reserve a private writer for the JSON-RPC protocol BEFORE anything else
+# can write to stdout. Then redirect Python's sys.stdout to stderr so any
+# third-party print() (yt-dlp, basic-pitch, coremltools, ...) lands on
+# stderr instead of corrupting the protocol stream.
+_PROTOCOL_FD = os.dup(sys.stdout.fileno())
+_PROTOCOL_OUT = os.fdopen(_PROTOCOL_FD, "w", buffering=1, encoding="utf-8")
+sys.stdout = sys.stderr
+
+
 def _emit(obj: JsonObject) -> None:
-    """Write a single JSON object as one line to stdout and flush."""
-    sys.stdout.write(json.dumps(obj, separators=(",", ":")))
-    sys.stdout.write("\n")
-    sys.stdout.flush()
+    """Write a single JSON object as one line to the protocol stream."""
+    _PROTOCOL_OUT.write(json.dumps(obj, separators=(",", ":")))
+    _PROTOCOL_OUT.write("\n")
+    _PROTOCOL_OUT.flush()
 
 
 def handle_ping(_params: JsonObject) -> JsonObject:

@@ -30,6 +30,9 @@ export interface LibraryEntry {
   processing_version: number;
   created_at: number;
   ready: boolean;
+  has_source: boolean;
+  has_stems: boolean;
+  has_midi: boolean;
 }
 
 type SidecarStatus =
@@ -240,6 +243,7 @@ export function LibraryScreen() {
             <LibraryRow
               key={entry.song_id}
               entry={entry}
+              busy={ingest.kind === "running"}
               onOpen={() =>
                 void navigate({
                   to: "/play/$songId",
@@ -247,6 +251,17 @@ export function LibraryScreen() {
                   search: { title: entry.title },
                 })
               }
+              onRetry={() => {
+                if (ingestingRef.current) return;
+                void runRetry(entry.song_id, setIngest, ingestingRef, (result) => {
+                  setRefreshKey((k) => k + 1);
+                  void navigate({
+                    to: "/play/$songId",
+                    params: { songId: result.song_id },
+                    search: { title: result.title },
+                  });
+                });
+              }}
               onDelete={() => {
                 setDeleteError(null);
                 setPendingDelete(entry);
@@ -278,6 +293,28 @@ export function LibraryScreen() {
 
 type IngestSource = { kind: "file"; path: string } | { kind: "url"; url: string };
 
+async function runRetry(
+  songId: string,
+  setIngest: (s: IngestStatus) => void,
+  ingestingRef: React.MutableRefObject<boolean>,
+  onReady: (result: IngestResult) => void,
+): Promise<void> {
+  ingestingRef.current = true;
+  setIngest({ kind: "running", path: songId });
+  try {
+    const result = await invoke<IngestResult>("retry_song", { songId });
+    console.log(
+      `retry ${result.cache_hit ? "no-op" : "completed"}: ${result.song_id} (${result.duration_sec.toFixed(1)}s)`,
+    );
+    setIngest({ kind: "idle" });
+    onReady(result);
+  } catch (err: unknown) {
+    setIngest({ kind: "error", message: String(err) });
+  } finally {
+    ingestingRef.current = false;
+  }
+}
+
 async function runIngest(
   source: IngestSource,
   setIngest: (s: IngestStatus) => void,
@@ -306,13 +343,18 @@ async function runIngest(
 
 function LibraryRow({
   entry,
+  busy,
   onOpen,
+  onRetry,
   onDelete,
 }: {
   entry: LibraryEntry;
+  busy: boolean;
   onOpen: () => void;
+  onRetry: () => void;
   onDelete: () => void;
 }) {
+  const canRetry = !entry.ready && entry.has_source;
   return (
     <HStack
       gap="3"
@@ -322,30 +364,60 @@ function LibraryRow({
       borderRadius="l2"
       alignItems="center"
       justifyContent="space-between"
-      opacity={entry.ready ? 1 : 0.55}
+      opacity={entry.ready ? 1 : 0.85}
     >
-      <VStack alignItems="flex-start" gap="0.5">
+      <VStack alignItems="flex-start" gap="1">
         <styled.div fontWeight="medium">{entry.title}</styled.div>
         <styled.div fontSize="xs" opacity="0.7">
           <styled.code>{entry.song_id}</styled.code> · {fmtTime(entry.duration_sec)} · v
           {entry.processing_version}
-          {!entry.ready && " · stale"}
         </styled.div>
+        {!entry.ready && (
+          <HStack gap="1" mt="0.5">
+            <StepPill label="source" done={entry.has_source} />
+            <StepPill label="stems" done={entry.has_stems} />
+            <StepPill label="midi" done={entry.has_midi} />
+          </HStack>
+        )}
       </VStack>
       <HStack gap="2">
-        <Button
-          size="sm"
-          variant={entry.ready ? "solid" : "outline"}
-          disabled={!entry.ready}
-          onClick={onOpen}
-        >
-          Open
-        </Button>
+        {entry.ready ? (
+          <Button size="sm" onClick={onOpen}>
+            Open
+          </Button>
+        ) : (
+          <Button
+            size="sm"
+            onClick={onRetry}
+            disabled={!canRetry || busy}
+            aria-label={`retry ${entry.title}`}
+          >
+            {canRetry ? "Retry" : "Re-ingest"}
+          </Button>
+        )}
         <Button size="sm" variant="outline" onClick={onDelete} aria-label={`delete ${entry.title}`}>
           Delete
         </Button>
       </HStack>
     </HStack>
+  );
+}
+
+function StepPill({ label, done }: { label: string; done: boolean }) {
+  return (
+    <styled.span
+      fontSize="2xs"
+      px="1.5"
+      py="0.5"
+      borderRadius="full"
+      borderWidth="1px"
+      borderColor={done ? "indigo.7" : "border"}
+      bg={done ? "indigo.4" : "transparent"}
+      color={done ? "indigo.12" : "fg.muted"}
+      fontVariantNumeric="tabular-nums"
+    >
+      {done ? "✓" : "·"} {label}
+    </styled.span>
   );
 }
 

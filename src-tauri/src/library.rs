@@ -109,6 +109,15 @@ pub fn has_midi(root: &Path, id: &str) -> bool {
     midi_path(root, id).is_file()
 }
 
+/// `<root>/<id>/source.wav`.
+pub fn source_path(root: &Path, id: &str) -> PathBuf {
+    song_dir(root, id).join("source.wav")
+}
+
+pub fn has_source(root: &Path, id: &str) -> bool {
+    source_path(root, id).is_file()
+}
+
 /// True iff the cache for `id` is complete and matches the current
 /// processing version. Used to short-circuit the Demucs + transcribe
 /// pipeline. A stale or partial entry returns false so it gets reprocessed.
@@ -130,6 +139,9 @@ pub struct LibraryEntry {
     pub processing_version: u32,
     pub created_at: f64,
     pub ready: bool,
+    pub has_source: bool,
+    pub has_stems: bool,
+    pub has_midi: bool,
 }
 
 /// List every cache entry under `root` for which a parseable `meta.json`
@@ -145,9 +157,10 @@ pub fn list(root: &Path, processing_version: u32) -> Vec<LibraryEntry> {
         .filter_map(|e| {
             let id = e.file_name().to_string_lossy().into_owned();
             let meta = read_meta(root, &id)?;
-            let ready = meta.processing_version == processing_version
-                && all_stems_present(root, &id)
-                && has_midi(root, &id);
+            let stems = all_stems_present(root, &id);
+            let midi = has_midi(root, &id);
+            let source = has_source(root, &id);
+            let ready = meta.processing_version == processing_version && stems && midi;
             Some(LibraryEntry {
                 song_id: meta.song_id,
                 title: meta.title,
@@ -155,6 +168,9 @@ pub fn list(root: &Path, processing_version: u32) -> Vec<LibraryEntry> {
                 processing_version: meta.processing_version,
                 created_at: meta.created_at,
                 ready,
+                has_source: source,
+                has_stems: stems,
+                has_midi: midi,
             })
         })
         .collect();
@@ -231,6 +247,7 @@ mod tests {
     fn write_complete_cache(root: &Path, id: &str, version: u32) {
         let song = ensure_song_dir(root, id).unwrap();
         std::fs::create_dir_all(song.join("stems")).unwrap();
+        std::fs::write(source_path(root, id), b"RIFFsrc.").unwrap();
         for name in STEM_NAMES {
             std::fs::write(stem_path(root, id, name).unwrap(), b"riff").unwrap();
         }

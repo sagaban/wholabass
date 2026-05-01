@@ -220,6 +220,97 @@ async fn list_library(app: AppHandle) -> Result<Vec<library::LibraryEntry>, Stri
 }
 
 #[tauri::command]
+async fn retry_song(
+    song_id: String,
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<IngestResult, String> {
+    let library_root = library::resolve_root(&app).map_err(|e| e.to_string())?;
+    let out_dir = library::song_dir(&library_root, &song_id);
+    if !out_dir.is_dir() {
+        return Err(format!("nothing to retry for {song_id}"));
+    }
+
+    let stems = library::all_stems_present(&library_root, &song_id);
+    let midi = library::has_midi(&library_root, &song_id);
+    let source = library::has_source(&library_root, &song_id);
+
+    if stems && midi {
+        // Already complete — return the cached IngestResult.
+        let meta = library::read_meta(&library_root, &song_id)
+            .ok_or_else(|| "stems + midi present but meta missing".to_string())?;
+        return Ok(IngestResult {
+            song_id: song_id.clone(),
+            title: meta.title,
+            out_dir: out_dir.display().to_string(),
+            stems: library::STEM_NAMES.iter().map(|s| (*s).to_string()).collect(),
+            duration_sec: meta.duration,
+            cache_hit: true,
+        });
+    }
+
+    if !source {
+        return Err(format!(
+            "source.wav missing for {song_id}; please re-ingest from scratch"
+        ));
+    }
+
+    let _ = midi; // already inferred via the `stems && midi` branch above.
+
+    *state.current_ingest.lock().await = Some(song_id.clone());
+    let result = run_retry(&state, &app, &song_id, &out_dir, stems).await;
+    *state.current_ingest.lock().await = None;
+    result
+}
+
+async fn run_retry(
+    state: &State<'_, AppState>,
+    app: &AppHandle,
+    song_id: &str,
+    out_dir: &std::path::Path,
+    stems: bool,
+) -> Result<IngestResult, String> {
+    let library_root = out_dir
+        .parent()
+        .ok_or_else(|| "song dir has no parent".to_string())?;
+    let source_path = out_dir.join("source.wav");
+
+    if !stems {
+        // Source exists but stems don't — resume at separate. run_separate
+        // chains transcribe so we end up complete.
+        let title = library::read_meta(library_root, song_id).map(|m| m.title);
+        return run_separate(state, app, song_id, &source_path, out_dir, title.as_deref()).await;
+    }
+
+    // Stems already present, only MIDI is missing — run transcribe alone.
+    let sc = take_sidecar(state).await?;
+    let app_emit = app.clone();
+    let bass_path = out_dir.join("stems").join("bass.wav");
+    sc.call_with_progress(
+        "transcribe",
+        serde_json::json!({
+            "song_id": song_id,
+            "bass_path": bass_path.to_string_lossy(),
+            "out_dir": out_dir.to_string_lossy(),
+        }),
+        |progress, stage| emit_progress(&app_emit, progress, stage),
+    )
+    .await
+    .map_err(|e| format!("transcribe: {e}"))?;
+
+    let meta = library::read_meta(library_root, song_id)
+        .ok_or_else(|| "post-retry meta missing".to_string())?;
+    Ok(IngestResult {
+        song_id: song_id.to_string(),
+        title: meta.title,
+        out_dir: out_dir.display().to_string(),
+        stems: library::STEM_NAMES.iter().map(|s| (*s).to_string()).collect(),
+        duration_sec: meta.duration,
+        cache_hit: false,
+    })
+}
+
+#[tauri::command]
 async fn delete_song(song_id: String, app: AppHandle) -> Result<(), String> {
     let library_root = library::resolve_root(&app).map_err(|e| e.to_string())?;
     library::delete_song(&library_root, &song_id).map_err(|e| e.to_string())
@@ -355,6 +446,7 @@ pub fn run() {
             ingest_file,
             ingest_url,
             cancel_ingest,
+            retry_song,
             list_library,
             delete_song,
             read_stem,
