@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { Box, HStack, VStack, styled } from "styled-system/jsx";
 import { Button, Slider } from "@/components/ui";
 import {
   StemEngine,
@@ -105,35 +106,30 @@ export function Player({ songId }: PlayerProps) {
   };
 
   if (load.kind === "loading") {
-    return <div style={{ marginTop: "1rem", opacity: 0.7 }}>loading stems...</div>;
+    return (
+      <Box mt="4" opacity="0.7">
+        loading stems...
+      </Box>
+    );
   }
   if (load.kind === "error") {
     return (
-      <div style={{ marginTop: "1rem", color: "#ff7676" }}>
+      <Box mt="4" color="error">
         load error: {load.message}
-      </div>
+      </Box>
     );
   }
 
   return (
-    <div
-      style={{
-        marginTop: "1.25rem",
-        display: "flex",
-        flexDirection: "column",
-        gap: "0.75rem",
-        alignItems: "stretch",
-        width: "min(540px, 100%)",
-      }}
-    >
-      <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+    <VStack mt="5" gap="3" alignItems="stretch" width="min(540px, 100%)">
+      <HStack gap="3" alignItems="center">
         <Button onClick={onTogglePlay} size="sm">
           {isPlaying ? "Pause" : "Play"}
         </Button>
-        <span style={{ fontVariantNumeric: "tabular-nums", opacity: 0.85 }}>
+        <styled.span fontVariantNumeric="tabular-nums" opacity="0.85">
           {fmtTime(position)} / {fmtTime(duration)}
-        </span>
-      </div>
+        </styled.span>
+      </HStack>
 
       <Slider.Root
         value={[position]}
@@ -154,7 +150,7 @@ export function Player({ songId }: PlayerProps) {
       </Slider.Root>
 
       {engineRef.current && <StemMixer engine={engineRef.current} />}
-    </div>
+    </VStack>
   );
 }
 

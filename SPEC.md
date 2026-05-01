@@ -161,7 +161,7 @@ wholabass/
 
 - **TypeScript:** `strict: true`, no `any` (escape via library types only). ESLint + Prettier.
 - **React:** function components + hooks. One component per file. PascalCase filenames.
-- **Styling:** Panda CSS — `css()`, `styled()`, `cva()`, design tokens from `styled-system/`. No inline `style={{...}}` in production code (smoke-test stubs are fine). Park UI components live in `src/components/ui/` and are copy-pasted via the Park CLI, not npm-installed; treat them as project code that may be edited freely.
+- **Styling:** Panda CSS — `styled-system/jsx` primitives (`Box`, `Stack`, `Grid`, etc.), token-aware style props (`<Box p="4" rounded="md">`), `css({...})` for one-offs, recipes from `styled-system/recipes`. **Never** use the React inline `style` prop; the only carve-out is a runtime-computed value with no token equivalent. Park UI components live in `src/components/ui/` and are copy-pasted via the Park CLI, not npm-installed; treat them as project code that may be edited freely.
 - **Rust:** rustfmt + clippy (warnings fail CI).
 - **Python:** `ruff` + `mypy --strict` on `ml/pipeline`.
 - **Naming:** PascalCase components, camelCase hooks/utils, snake_case Rust + Python.

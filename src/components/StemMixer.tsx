@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Box, Divider, Grid, HStack, styled } from "styled-system/jsx";
 import { Button, Slider } from "@/components/ui";
 import { STEM_NAMES, type StemEngine, type StemName } from "@/audio/engine";
 
@@ -13,6 +14,7 @@ interface StripState {
 }
 
 const INITIAL_STRIP: StripState = { volume: 1, muted: false, soloed: false };
+const STRIP_GRID_COLS = "70px 1fr 36px 70px";
 
 export function StemMixer({ engine }: StemMixerProps) {
   const [strips, setStrips] = useState<Record<StemName, StripState>>({
@@ -50,20 +52,19 @@ export function StemMixer({ engine }: StemMixerProps) {
   };
 
   return (
-    <div
-      style={{
-        marginTop: "0.75rem",
-        padding: "0.75rem",
-        border: "1px solid #333",
-        borderRadius: 8,
-        display: "flex",
-        flexDirection: "column",
-        gap: "0.5rem",
-        width: "min(540px, 100%)",
-      }}
+    <Box
+      mt="3"
+      p="3"
+      borderWidth="1px"
+      borderColor="border"
+      borderRadius="l3"
+      display="flex"
+      flexDirection="column"
+      gap="2"
+      width="min(540px, 100%)"
     >
       <MasterStrip value={master} onChange={onMasterChange} />
-      <hr style={{ border: 0, borderTop: "1px solid #333", margin: "0.25rem 0" }} />
+      <Divider color="border" />
       {STEM_NAMES.map((stem) => (
         <Strip
           key={stem}
@@ -74,7 +75,7 @@ export function StemMixer({ engine }: StemMixerProps) {
           onToggleSolo={() => onToggleSolo(stem)}
         />
       ))}
-    </div>
+    </Box>
   );
 }
 
@@ -86,15 +87,10 @@ function MasterStrip({
   onChange: (v: number) => void;
 }) {
   return (
-    <div
-      style={{
-        display: "grid",
-        gridTemplateColumns: "70px 1fr 36px 70px",
-        alignItems: "center",
-        gap: "0.5rem",
-      }}
-    >
-      <div style={{ fontSize: "0.9rem", fontWeight: 600 }}>Master</div>
+    <Grid gridTemplateColumns={STRIP_GRID_COLS} alignItems="center" gap="2">
+      <styled.div fontSize="sm" fontWeight="semibold">
+        Master
+      </styled.div>
       <Slider.Root
         value={[value]}
         onValueChange={(d) => onChange(d.value[0] ?? 0)}
@@ -112,18 +108,9 @@ function MasterStrip({
           </Slider.Thumb>
         </Slider.Control>
       </Slider.Root>
-      <div
-        style={{
-          fontVariantNumeric: "tabular-nums",
-          fontSize: "0.8rem",
-          opacity: 0.7,
-          textAlign: "right",
-        }}
-      >
-        {Math.round(value * 100)}
-      </div>
-      <div />
-    </div>
+      <ValueReadout>{Math.round(value * 100)}</ValueReadout>
+      <Box />
+    </Grid>
   );
 }
 
@@ -143,15 +130,10 @@ function Strip({
   onToggleSolo,
 }: StripProps) {
   return (
-    <div
-      style={{
-        display: "grid",
-        gridTemplateColumns: "70px 1fr 36px 70px",
-        alignItems: "center",
-        gap: "0.5rem",
-      }}
-    >
-      <div style={{ fontSize: "0.9rem", textTransform: "capitalize" }}>{stem}</div>
+    <Grid gridTemplateColumns={STRIP_GRID_COLS} alignItems="center" gap="2">
+      <styled.div fontSize="sm" textTransform="capitalize">
+        {stem}
+      </styled.div>
 
       <Slider.Root
         value={[state.volume]}
@@ -171,18 +153,9 @@ function Strip({
         </Slider.Control>
       </Slider.Root>
 
-      <div
-        style={{
-          fontVariantNumeric: "tabular-nums",
-          fontSize: "0.8rem",
-          opacity: 0.7,
-          textAlign: "right",
-        }}
-      >
-        {Math.round(state.volume * 100)}
-      </div>
+      <ValueReadout>{Math.round(state.volume * 100)}</ValueReadout>
 
-      <div style={{ display: "flex", gap: "0.25rem", justifyContent: "flex-end" }}>
+      <HStack gap="1" justifyContent="flex-end">
         <Button
           size="xs"
           variant={state.muted ? "solid" : "outline"}
@@ -201,7 +174,20 @@ function Strip({
         >
           S
         </Button>
-      </div>
-    </div>
+      </HStack>
+    </Grid>
+  );
+}
+
+function ValueReadout({ children }: { children: React.ReactNode }) {
+  return (
+    <styled.div
+      fontVariantNumeric="tabular-nums"
+      fontSize="xs"
+      opacity="0.7"
+      textAlign="right"
+    >
+      {children}
+    </styled.div>
   );
 }

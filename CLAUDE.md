@@ -53,12 +53,19 @@ Newline-delimited JSON, one object per line:
 
 Adding a method = handler in `ml/server.py` + typed wrapper in `src-tauri/src/ipc.rs` + Tauri command in `src-tauri/src/lib.rs` + test on both sides.
 
-## Frontend styling
+## Frontend styling — hard rule
 
-- Style with Panda CSS: `import { css } from "styled-system/css"`, `import { Box, Stack } from "styled-system/jsx"`, recipes from `styled-system/recipes`. Avoid inline `style={{...}}` in production code.
-- Park UI components live in `src/components/ui/` and are part of the codebase — edit them freely; don't try to upgrade them via npm. New components: `pnpm dlx @park-ui/cli add <name>`.
+**Never** use the React inline `style={{...}}` prop in `src/`. Always style via Panda CSS.
+
+- Layout primitives: import from `styled-system/jsx` — `Box`, `Stack`, `HStack`, `VStack`, `Grid`, `Flex`, `Center`, `Container`, `Spacer`, `Wrap`, `Divider`, `AspectRatio`. Prefer these over plain `<div>` / `<span>` whenever there is any styling involved.
+- Style props: pass token-aware shortcuts directly to `styled-system/jsx` components (`<Box p="4" rounded="md" bg="bg.subtle" gap="2">`). These are the first choice.
+- One-offs: `import { css } from "styled-system/css"` and use `className={css({...})}` for things style props can't express.
+- Recipes: `styled-system/recipes` for reusable multi-variant styles.
+- Park UI components in `src/components/ui/` are project code — edit them freely. New ones: `pnpm dlx @park-ui/cli add <name>`.
 - Theme changes (colors, radii, recipes) go in `src/theme/`. Run `pnpm exec panda codegen` after editing.
 - `styled-system/` and `styled-system-studio/` are gitignored; never commit either.
+
+The only acceptable use of inline `style` is a runtime-computed value with no token equivalent (e.g. a dynamic `transform` derived from JS state). Default to refusing it; reach for it only after confirming no Panda mechanism fits.
 
 ## Non-obvious rules (everything else, defer to SPEC.md)
 

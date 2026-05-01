@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { Box, Stack, VStack, styled } from "styled-system/jsx";
 import { Player } from "@/components/Player";
 
 type PingResult = {
@@ -80,11 +81,13 @@ export default function App() {
   }, []);
 
   return (
-    <main style={{ padding: "2rem", fontSize: "1.1rem" }}>
-      <h1 style={{ marginTop: 0 }}>wholabass</h1>
+    <Box as="main" p="8" fontSize="lg">
+      <styled.h1 mt="0" mb="4">
+        wholabass
+      </styled.h1>
       <SidecarLine status={sidecar} />
       <DropZone hovering={hovering} ingest={ingest} />
-    </main>
+    </Box>
   );
 }
 
@@ -109,17 +112,25 @@ function SidecarLine({ status }: { status: SidecarStatus }) {
   switch (status.kind) {
     case "idle":
     case "loading":
-      return <p style={{ opacity: 0.7 }}>sidecar: starting...</p>;
+      return (
+        <styled.p opacity="0.7" m="0">
+          sidecar: starting...
+        </styled.p>
+      );
     case "ok": {
       const ts = new Date(status.ping.timestamp * 1000).toISOString();
       return (
-        <p>
+        <styled.p m="0">
           sidecar: ok ({ts}) · processing v{status.ping.processing_version}
-        </p>
+        </styled.p>
       );
     }
     case "error":
-      return <p style={{ color: "#ff7676" }}>sidecar error: {status.message}</p>;
+      return (
+        <styled.p color="error" m="0">
+          sidecar error: {status.message}
+        </styled.p>
+      );
   }
 }
 
@@ -130,21 +141,22 @@ function DropZone({
   hovering: boolean;
   ingest: IngestStatus;
 }) {
-  const border = hovering ? "2px dashed #6cf" : "2px dashed #444";
   return (
-    <section
-      style={{
-        marginTop: "1.5rem",
-        padding: "2rem",
-        border,
-        borderRadius: 8,
-        textAlign: "center",
-        opacity: ingest.kind === "running" ? 0.7 : 1,
-      }}
+    <Box
+      as="section"
+      mt="6"
+      p="8"
+      borderWidth="2px"
+      borderStyle="dashed"
+      borderColor={hovering ? "iris.9" : "border"}
+      borderRadius="l3"
+      textAlign="center"
+      opacity={ingest.kind === "running" ? 0.7 : 1}
+      transition="border-color 120ms ease"
     >
-      <p style={{ margin: 0 }}>Drop an audio file (mp3 / wav / m4a / flac) here.</p>
+      <styled.p m="0">Drop an audio file (mp3 / wav / m4a / flac) here.</styled.p>
       <IngestLine ingest={ingest} />
-    </section>
+    </Box>
   );
 }
 
@@ -154,34 +166,28 @@ function IngestLine({ ingest }: { ingest: IngestStatus }) {
       return null;
     case "running":
       return (
-        <p style={{ marginTop: "1rem", opacity: 0.8 }}>
+        <styled.p mt="4" opacity="0.8">
           processing: {ingest.path}
-        </p>
+        </styled.p>
       );
     case "ready":
       return (
-        <div
-          style={{
-            marginTop: "1rem",
-            display: "flex",
-            flexDirection: "column",
-            alignItems: "center",
-            gap: "0.5rem",
-          }}
-        >
-          <p style={{ margin: 0 }}>
-            ready: <code>{ingest.result.song_id}</code> ·{" "}
+        <VStack mt="4" gap="2" alignItems="center">
+          <styled.p m="0">
+            ready: <styled.code>{ingest.result.song_id}</styled.code> ·{" "}
             {ingest.result.duration_sec.toFixed(1)}s · stems:{" "}
             {ingest.result.stems.join(", ")}
-          </p>
+          </styled.p>
           <Player songId={ingest.result.song_id} />
-        </div>
+        </VStack>
       );
     case "error":
       return (
-        <p style={{ marginTop: "1rem", color: "#ff7676" }}>
-          error: {ingest.message}
-        </p>
+        <Stack mt="4">
+          <styled.p color="error" m="0">
+            error: {ingest.message}
+          </styled.p>
+        </Stack>
       );
   }
 }
