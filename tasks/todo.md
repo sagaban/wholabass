@@ -4,7 +4,7 @@ See [plan.md](plan.md) for full task descriptions, acceptance criteria, and veri
 
 ## Critical path
 
-- [ ] T0  — Foundation scaffold (Tauri + React + TS + Python sidecar + library helpers)
+- [x] T0  — Foundation scaffold (Tauri + React + TS + Python sidecar + library helpers)
 - [ ] T1  — Local file → 4 stems on disk (Demucs)
 - [ ] T2  — Multi-stem synced playback (Web Audio, master transport)
 - [ ] T3  — Stem mixer (volume + mute/solo)
