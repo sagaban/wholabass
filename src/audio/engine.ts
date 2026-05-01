@@ -1,39 +1,19 @@
 /**
- * Multi-stem synced playback on one shared AudioContext.
+ * Multi-stem synced playback with pitch-preserving time-stretch.
  *
- * All four stems are scheduled with a single `start(time)` so they stay
- * sample-aligned. Seek = stop sources + recreate from the new offset.
+ * Each stem is an HTMLAudioElement piped through MediaElementAudioSourceNode
+ * → GainNode → masterGain → destination. We use the element's playbackRate
+ * (with preservesPitch = true) to slow down without shifting pitch — Chromium
+ * webviews honour this. All four elements share the same currentTime + rate
+ * so they stay sample-frame-aligned within typical media-element jitter
+ * (~10 ms in practice, well inside the spec's ±20 ms budget).
  */
 
 export type StemName = "vocals" | "drums" | "bass" | "other";
 
 export const STEM_NAMES: readonly StemName[] = ["vocals", "drums", "bass", "other"] as const;
 
-export type StemBuffers = Record<StemName, AudioBuffer>;
-
-export type EngineState =
-  | { kind: "stopped" }
-  | { kind: "paused"; offset: number }
-  | { kind: "playing"; ctxStartTime: number; offsetAtStart: number };
-
-/**
- * Pure time math. `ctxNow` is `audioContext.currentTime`; `duration` is the
- * stem length in seconds. Result is clamped to `[0, duration]`.
- */
-export function currentOffset(state: EngineState, ctxNow: number, duration: number): number {
-  switch (state.kind) {
-    case "stopped":
-      return 0;
-    case "paused":
-      return clamp(state.offset, 0, duration);
-    case "playing":
-      return clamp(state.offsetAtStart + (ctxNow - state.ctxStartTime), 0, duration);
-  }
-}
-
-function clamp(v: number, lo: number, hi: number): number {
-  return v < lo ? lo : v > hi ? hi : v;
-}
+export type StemUrls = Record<StemName, string>;
 
 export type StemFlags = Record<StemName, boolean>;
 export type StemVolumes = Record<StemName, number>;
@@ -59,6 +39,8 @@ export function effectiveGain(
 }
 
 const RAMP_SECONDS = 0.01;
+const TEMPO_MIN = 0.5;
+const TEMPO_MAX = 1.0;
 
 const ZERO_FLAGS: StemFlags = {
   vocals: false,
@@ -73,26 +55,33 @@ const FULL_VOLUMES: StemVolumes = {
   other: 1,
 };
 
+function clamp(v: number, lo: number, hi: number): number {
+  return v < lo ? lo : v > hi ? hi : v;
+}
+
 export class StemEngine {
   private readonly ctx: AudioContext;
-  private buffers: StemBuffers | null = null;
-  private sources: Partial<Record<StemName, AudioBufferSourceNode>> = {};
+  private audios: Partial<Record<StemName, HTMLAudioElement>> = {};
+  private sources: Partial<Record<StemName, MediaElementAudioSourceNode>> = {};
   private gains: Partial<Record<StemName, GainNode>> = {};
   private master: GainNode | null = null;
-  private state: EngineState = { kind: "stopped" };
+  private hasLoaded = false;
   private volumes: StemVolumes = { ...FULL_VOLUMES };
   private muted: StemFlags = { ...ZERO_FLAGS };
   private soloed: StemFlags = { ...ZERO_FLAGS };
   private masterVolume = 1;
+  private tempo = 1.0;
 
   constructor(ctx: AudioContext) {
     this.ctx = ctx;
   }
 
-  load(buffers: StemBuffers): void {
-    this.stopSources();
-    this.buffers = buffers;
-    this.state = { kind: "stopped" };
+  /**
+   * Wire up four HTMLAudioElements with the supplied URLs (typically blob
+   * URLs from the loaded stem WAVs). Idempotent: re-binding existing
+   * elements just swaps their `src`.
+   */
+  load(urls: StemUrls): void {
     if (!this.master) {
       const m = this.ctx.createGain();
       m.gain.setValueAtTime(this.masterVolume, this.ctx.currentTime);
@@ -100,22 +89,73 @@ export class StemEngine {
       this.master = m;
     }
     for (const name of STEM_NAMES) {
-      if (!this.gains[name]) {
-        const g = this.ctx.createGain();
-        // Anchor the AudioParam timeline so future linearRampToValueAtTime
-        // calls have a defined start value.
-        g.gain.setValueAtTime(
+      let audio = this.audios[name];
+      if (!audio) {
+        audio = new Audio();
+        audio.preload = "auto";
+        audio.preservesPitch = true;
+        audio.crossOrigin = "anonymous";
+        this.audios[name] = audio;
+      }
+      audio.src = urls[name];
+      audio.playbackRate = this.tempo;
+      audio.preservesPitch = true;
+
+      let source = this.sources[name];
+      if (!source) {
+        source = this.ctx.createMediaElementSource(audio);
+        this.sources[name] = source;
+      }
+
+      let gain = this.gains[name];
+      if (!gain) {
+        gain = this.ctx.createGain();
+        gain.gain.setValueAtTime(
           effectiveGain(this.volumes, this.muted, this.soloed, name),
           this.ctx.currentTime,
         );
-        g.connect(this.master);
-        this.gains[name] = g;
+        source.connect(gain);
+        gain.connect(this.master);
+        this.gains[name] = gain;
       }
+    }
+    this.hasLoaded = true;
+  }
+
+  async play(offset?: number): Promise<void> {
+    if (!this.hasLoaded) return;
+    if (offset !== undefined) this.seek(offset);
+    await Promise.all(
+      STEM_NAMES.map((n) => this.audios[n]?.play()).filter((p): p is Promise<void> => !!p),
+    );
+  }
+
+  pause(): void {
+    if (!this.hasLoaded) return;
+    for (const name of STEM_NAMES) this.audios[name]?.pause();
+  }
+
+  seek(offset: number): void {
+    if (!this.hasLoaded) return;
+    const target = clamp(offset, 0, this.duration);
+    for (const name of STEM_NAMES) {
+      const a = this.audios[name];
+      if (a) a.currentTime = target;
     }
   }
 
   setVolume(stem: StemName, value: number): void {
     this.volumes[stem] = clamp(value, 0, 1);
+    this.applyMix();
+  }
+
+  setMuted(stem: StemName, on: boolean): void {
+    this.muted[stem] = on;
+    this.applyMix();
+  }
+
+  setSoloed(stem: StemName, on: boolean): void {
+    this.soloed[stem] = on;
     this.applyMix();
   }
 
@@ -128,18 +168,14 @@ export class StemEngine {
     this.master.gain.linearRampToValueAtTime(this.masterVolume, now + RAMP_SECONDS);
   }
 
-  getMasterVolume(): number {
-    return this.masterVolume;
-  }
-
-  setMuted(stem: StemName, on: boolean): void {
-    this.muted[stem] = on;
-    this.applyMix();
-  }
-
-  setSoloed(stem: StemName, on: boolean): void {
-    this.soloed[stem] = on;
-    this.applyMix();
+  setTempo(value: number): void {
+    this.tempo = clamp(value, TEMPO_MIN, TEMPO_MAX);
+    for (const name of STEM_NAMES) {
+      const a = this.audios[name];
+      if (!a) continue;
+      a.preservesPitch = true;
+      a.playbackRate = this.tempo;
+    }
   }
 
   getVolume(stem: StemName): number {
@@ -154,6 +190,32 @@ export class StemEngine {
     return this.soloed[stem];
   }
 
+  getMasterVolume(): number {
+    return this.masterVolume;
+  }
+
+  getTempo(): number {
+    return this.tempo;
+  }
+
+  getCurrentTime(): number {
+    return this.audios.vocals?.currentTime ?? 0;
+  }
+
+  get duration(): number {
+    const d = this.audios.vocals?.duration;
+    return Number.isFinite(d) ? (d as number) : 0;
+  }
+
+  get isPlaying(): boolean {
+    const a = this.audios.vocals;
+    return !!a && !a.paused && !a.ended;
+  }
+
+  get hasBuffers(): boolean {
+    return this.hasLoaded;
+  }
+
   /** Recompute effective gains and ramp every GainNode to its new value. */
   private applyMix(): void {
     const now = this.ctx.currentTime;
@@ -162,78 +224,9 @@ export class StemEngine {
       const node = this.gains[name];
       if (!node) continue;
       const value = effectiveGain(this.volumes, this.muted, this.soloed, name);
-      // Cancel pending automation, anchor the current value at `now`, then
-      // ramp. Without the anchor the ramp's start value is undefined when
-      // gain.value was set via the property assignment rather than scheduled.
       node.gain.cancelScheduledValues(now);
       node.gain.setValueAtTime(node.gain.value, now);
       node.gain.linearRampToValueAtTime(value, target);
-    }
-  }
-
-  play(offset?: number): void {
-    if (!this.buffers) return;
-    const startOffset = offset ?? (this.state.kind === "paused" ? this.state.offset : 0);
-    this.stopSources();
-    const startTime = this.ctx.currentTime;
-    for (const name of STEM_NAMES) {
-      const src = this.ctx.createBufferSource();
-      src.buffer = this.buffers[name];
-      src.connect(this.gains[name]!);
-      src.start(startTime, Math.max(0, startOffset));
-      this.sources[name] = src;
-    }
-    this.state = {
-      kind: "playing",
-      ctxStartTime: startTime,
-      offsetAtStart: startOffset,
-    };
-  }
-
-  pause(): void {
-    if (this.state.kind !== "playing") return;
-    const offset = currentOffset(this.state, this.ctx.currentTime, this.duration);
-    this.stopSources();
-    this.state = { kind: "paused", offset };
-  }
-
-  seek(offset: number): void {
-    const clamped = clamp(offset, 0, this.duration);
-    if (this.state.kind === "playing") {
-      this.play(clamped);
-    } else {
-      this.state = { kind: "paused", offset: clamped };
-    }
-  }
-
-  getCurrentTime(): number {
-    return currentOffset(this.state, this.ctx.currentTime, this.duration);
-  }
-
-  get duration(): number {
-    return this.buffers?.vocals.duration ?? 0;
-  }
-
-  get isPlaying(): boolean {
-    return this.state.kind === "playing";
-  }
-
-  get hasBuffers(): boolean {
-    return this.buffers !== null;
-  }
-
-  private stopSources(): void {
-    for (const name of STEM_NAMES) {
-      const src = this.sources[name];
-      if (src) {
-        try {
-          src.stop();
-        } catch {
-          // already stopped or never started; safe to ignore
-        }
-        src.disconnect();
-        delete this.sources[name];
-      }
     }
   }
 }

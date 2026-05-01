@@ -1,51 +1,25 @@
 import { describe, expect, test, vi } from "vitest";
 import {
-  currentOffset,
   effectiveGain,
   StemEngine,
   STEM_NAMES,
-  type EngineState,
-  type StemBuffers,
   type StemFlags,
+  type StemUrls,
   type StemVolumes,
 } from "./engine";
 
 const NO_FLAGS: StemFlags = { vocals: false, drums: false, bass: false, other: false };
 const FULL: StemVolumes = { vocals: 1, drums: 1, bass: 1, other: 1 };
 
-describe("currentOffset", () => {
-  test("stopped → 0", () => {
-    const s: EngineState = { kind: "stopped" };
-    expect(currentOffset(s, 99, 100)).toBe(0);
-  });
-
-  test("paused → offset, clamped to duration", () => {
-    expect(currentOffset({ kind: "paused", offset: 42 }, 0, 100)).toBe(42);
-    expect(currentOffset({ kind: "paused", offset: 200 }, 0, 100)).toBe(100);
-    expect(currentOffset({ kind: "paused", offset: -5 }, 0, 100)).toBe(0);
-  });
-
-  test("playing → offsetAtStart + (ctxNow - ctxStartTime)", () => {
-    const s: EngineState = {
-      kind: "playing",
-      ctxStartTime: 10,
-      offsetAtStart: 30,
-    };
-    expect(currentOffset(s, 12, 100)).toBe(32); // played 2s into a 30s start offset
-  });
-
-  test("playing past end clamps to duration", () => {
-    const s: EngineState = {
-      kind: "playing",
-      ctxStartTime: 0,
-      offsetAtStart: 95,
-    };
-    expect(currentOffset(s, 10, 100)).toBe(100);
-  });
-});
+const URLS: StemUrls = {
+  vocals: "blob:vocals",
+  drums: "blob:drums",
+  bass: "blob:bass",
+  other: "blob:other",
+};
 
 // ---------------------------------------------------------------------------
-// Engine integration tests with a stub AudioContext.
+// Stub Web Audio + HTMLAudioElement so we can drive the engine from Node.
 // ---------------------------------------------------------------------------
 
 type FakeGainNode = GainNode & {
@@ -59,8 +33,8 @@ type FakeGainNode = GainNode & {
 class FakeAudioContext {
   public currentTime = 0;
   public destination = {} as AudioDestinationNode;
-  public lastGain?: FakeGainNode;
   public allGains: FakeGainNode[] = [];
+  public mediaSources: object[] = [];
   createGain(): GainNode {
     const node = {
       gain: {
@@ -72,115 +46,42 @@ class FakeAudioContext {
       connect: vi.fn(),
       disconnect: vi.fn(),
     } as unknown as FakeGainNode;
-    this.lastGain = node;
     this.allGains.push(node);
     return node;
   }
-  createBufferSource(): AudioBufferSourceNode {
-    return {
-      buffer: null,
+  createMediaElementSource(_el: HTMLAudioElement): MediaElementAudioSourceNode {
+    const source = {
       connect: vi.fn(),
       disconnect: vi.fn(),
-      start: vi.fn(),
-      stop: vi.fn(),
-    } as unknown as AudioBufferSourceNode;
+    } as unknown as MediaElementAudioSourceNode;
+    this.mediaSources.push(source);
+    return source;
   }
 }
 
-function makeBuffers(duration: number): StemBuffers {
-  const buf = { duration } as AudioBuffer;
-  return {
-    vocals: buf,
-    drums: buf,
-    bass: buf,
-    other: buf,
-  };
+class FakeAudio {
+  src = "";
+  preload = "";
+  crossOrigin: string | null = null;
+  preservesPitch = false;
+  playbackRate = 1;
+  currentTime = 0;
+  duration = 100;
+  paused = true;
+  ended = false;
+  play = vi.fn(async () => {
+    this.paused = false;
+  });
+  pause = vi.fn(() => {
+    this.paused = true;
+  });
 }
 
-describe("StemEngine", () => {
-  test("getCurrentTime is 0 before load", () => {
-    const ctx = new FakeAudioContext();
-    const engine = new StemEngine(ctx as unknown as AudioContext);
-    expect(engine.getCurrentTime()).toBe(0);
-    expect(engine.duration).toBe(0);
-    expect(engine.isPlaying).toBe(false);
-  });
-
-  test("play(offset) starts all 4 sources at offset", () => {
-    const ctx = new FakeAudioContext();
-    const engine = new StemEngine(ctx as unknown as AudioContext);
-    engine.load(makeBuffers(100));
-
-    ctx.currentTime = 5;
-    engine.play(20);
-
-    expect(engine.isPlaying).toBe(true);
-    // After 0s of wall-clock time we should be at the offset itself.
-    expect(engine.getCurrentTime()).toBe(20);
-
-    // Advance the clock 3s: position should follow.
-    ctx.currentTime = 8;
-    expect(engine.getCurrentTime()).toBeCloseTo(23, 5);
-  });
-
-  test("pause captures the play head; resume continues from there", () => {
-    const ctx = new FakeAudioContext();
-    const engine = new StemEngine(ctx as unknown as AudioContext);
-    engine.load(makeBuffers(100));
-
-    ctx.currentTime = 0;
-    engine.play(0);
-    ctx.currentTime = 7.5;
-    engine.pause();
-    expect(engine.isPlaying).toBe(false);
-    expect(engine.getCurrentTime()).toBeCloseTo(7.5, 5);
-
-    ctx.currentTime = 999; // arbitrary advance while paused
-    engine.play();
-    // First sample of the resumed play head equals the pause position.
-    expect(engine.getCurrentTime()).toBeCloseTo(7.5, 5);
-  });
-
-  test("seek while playing restarts at offset", () => {
-    const ctx = new FakeAudioContext();
-    const engine = new StemEngine(ctx as unknown as AudioContext);
-    engine.load(makeBuffers(100));
-
-    ctx.currentTime = 0;
-    engine.play(0);
-    ctx.currentTime = 2;
-    engine.seek(60);
-    expect(engine.isPlaying).toBe(true);
-    expect(engine.getCurrentTime()).toBe(60);
-  });
-
-  test("seek while paused just updates the stored offset", () => {
-    const ctx = new FakeAudioContext();
-    const engine = new StemEngine(ctx as unknown as AudioContext);
-    engine.load(makeBuffers(100));
-
-    engine.seek(33);
-    expect(engine.isPlaying).toBe(false);
-    expect(engine.getCurrentTime()).toBe(33);
-  });
-
-  test("seek clamps to [0, duration]", () => {
-    const ctx = new FakeAudioContext();
-    const engine = new StemEngine(ctx as unknown as AudioContext);
-    engine.load(makeBuffers(100));
-    engine.seek(-5);
-    expect(engine.getCurrentTime()).toBe(0);
-    engine.seek(500);
-    expect(engine.getCurrentTime()).toBe(100);
-  });
-
-  test("STEM_NAMES contains the canonical four", () => {
-    expect([...STEM_NAMES].toSorted()).toEqual(["bass", "drums", "other", "vocals"]);
-  });
-});
+// Engine.load() does `new Audio()`; install the stub once for the whole suite.
+(globalThis as unknown as { Audio: typeof FakeAudio }).Audio = FakeAudio;
 
 // ---------------------------------------------------------------------------
-// Mixer math + gain ramp.
+// Mixer math.
 // ---------------------------------------------------------------------------
 
 describe("effectiveGain", () => {
@@ -223,32 +124,89 @@ describe("effectiveGain", () => {
   });
 });
 
-describe("StemEngine mixer setters", () => {
-  function setup() {
-    const ctx = new FakeAudioContext();
-    const engine = new StemEngine(ctx as unknown as AudioContext);
-    engine.load(makeBuffers(100));
-    // load() creates the master gain first, then one per stem in STEM_NAMES
-    // order. So allGains is [master, vocals, drums, bass, other].
-    return {
-      ctx,
-      engine,
-      gains: ctx.allGains,
-      stemGains: ctx.allGains.slice(1),
-    };
-  }
+// ---------------------------------------------------------------------------
+// Engine integration.
+// ---------------------------------------------------------------------------
 
+function setup() {
+  const ctx = new FakeAudioContext();
+  const engine = new StemEngine(ctx as unknown as AudioContext);
+  engine.load(URLS);
+  return {
+    ctx,
+    engine,
+    gains: ctx.allGains,
+    stemGains: ctx.allGains.slice(1),
+    audios: STEM_NAMES.map(
+      (n) =>
+        // Reach into the engine via a typed-loosened any to inspect the
+        // stub HTMLAudioElement bound to each stem name.
+        (engine as unknown as { audios: Record<string, FakeAudio> }).audios[n],
+    ),
+  };
+}
+
+describe("StemEngine — element wiring", () => {
+  test("load() creates one media-source + gain per stem", () => {
+    const { ctx, audios } = setup();
+    expect(audios.length).toBe(4);
+    for (const a of audios) {
+      expect(a.src).toMatch(/^blob:/);
+      expect(a.preservesPitch).toBe(true);
+    }
+    expect(ctx.mediaSources.length).toBe(4);
+    // 1 master + 4 stem gains.
+    expect(ctx.allGains.length).toBe(5);
+  });
+
+  test("play / pause / seek delegate to elements", async () => {
+    const { engine, audios } = setup();
+    await engine.play();
+    for (const a of audios) expect(a.play).toHaveBeenCalled();
+    expect(engine.isPlaying).toBe(true);
+
+    engine.pause();
+    for (const a of audios) expect(a.pause).toHaveBeenCalled();
+    expect(engine.isPlaying).toBe(false);
+
+    engine.seek(42);
+    for (const a of audios) expect(a.currentTime).toBe(42);
+  });
+
+  test("getCurrentTime reads from the vocals element", () => {
+    const { engine, audios } = setup();
+    audios[0].currentTime = 12.5;
+    expect(engine.getCurrentTime()).toBeCloseTo(12.5, 5);
+  });
+
+  test("seek clamps to [0, duration]", () => {
+    const { engine, audios } = setup();
+    engine.seek(-5);
+    for (const a of audios) expect(a.currentTime).toBe(0);
+    engine.seek(500);
+    for (const a of audios) expect(a.currentTime).toBe(100); // FakeAudio.duration
+  });
+
+  test("STEM_NAMES contains the canonical four", () => {
+    expect([...STEM_NAMES].toSorted()).toEqual(["bass", "drums", "other", "vocals"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Mixer setters + ramps.
+// ---------------------------------------------------------------------------
+
+describe("StemEngine mixer setters", () => {
   test("setVolume ramps the matching GainNode toward the new value", () => {
     const { ctx, engine, stemGains } = setup();
     ctx.currentTime = 5;
     engine.setVolume("bass", 0.2);
-    // bass is the 3rd entry in STEM_NAMES → index 2.
     const bassGain = stemGains[2]!;
     const ramp = bassGain.gain.linearRampToValueAtTime;
     expect(ramp).toHaveBeenCalled();
     const lastCall = ramp.mock.calls[ramp.mock.calls.length - 1]!;
     expect(lastCall[0]).toBeCloseTo(0.2, 5);
-    expect(lastCall[1]).toBeCloseTo(5 + 0.01, 5); // ~10ms ramp
+    expect(lastCall[1]).toBeCloseTo(5 + 0.01, 5);
   });
 
   test("setMuted forces gain to 0; unmute restores volume", () => {
@@ -268,11 +226,9 @@ describe("StemEngine mixer setters", () => {
 
   test("solo silences the other three stems via ramp", () => {
     const { engine, stemGains } = setup();
-    // Clear initial load() calls.
     for (const g of stemGains) g.gain.linearRampToValueAtTime.mockClear();
 
     engine.setSoloed("bass", true);
-    // bass = idx 2; rest should ramp to 0.
     const [vocalsRamp, drumsRamp, bassRamp, otherRamp] = stemGains.map(
       (g) => g.gain.linearRampToValueAtTime,
     );
@@ -299,8 +255,6 @@ describe("StemEngine mixer setters", () => {
 
   test("setMasterVolume clamps and ramps the master gain", () => {
     const { ctx, engine, gains } = setup();
-    // 4 stem gains created first; master is created in load() before stems.
-    // Order in allGains: master (idx 0), vocals (1), drums (2), bass (3), other (4).
     const master = gains[0]!;
 
     ctx.currentTime = 3;
@@ -309,12 +263,53 @@ describe("StemEngine mixer setters", () => {
     expect(last[0]).toBeCloseTo(0.4, 5);
     expect(last[1]).toBeCloseTo(3 + 0.01, 5);
 
-    engine.setMasterVolume(5); // clamped to 1
+    engine.setMasterVolume(5);
     last = master.gain.linearRampToValueAtTime.mock.calls.at(-1)!;
     expect(last[0]).toBe(1);
     expect(engine.getMasterVolume()).toBe(1);
 
-    engine.setMasterVolume(-2); // clamped to 0
+    engine.setMasterVolume(-2);
     expect(engine.getMasterVolume()).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tempo (T7).
+// ---------------------------------------------------------------------------
+
+describe("StemEngine.setTempo", () => {
+  test("writes playbackRate + preservesPitch on every element", () => {
+    const { engine, audios } = setup();
+    engine.setTempo(0.75);
+    for (const a of audios) {
+      expect(a.playbackRate).toBeCloseTo(0.75, 5);
+      expect(a.preservesPitch).toBe(true);
+    }
+    expect(engine.getTempo()).toBeCloseTo(0.75, 5);
+  });
+
+  test("clamps to [0.5, 1.0]", () => {
+    const { engine, audios } = setup();
+    engine.setTempo(0.1);
+    expect(engine.getTempo()).toBe(0.5);
+    for (const a of audios) expect(a.playbackRate).toBe(0.5);
+
+    engine.setTempo(2.5);
+    expect(engine.getTempo()).toBe(1);
+    for (const a of audios) expect(a.playbackRate).toBe(1);
+  });
+
+  test("tempo set before load is applied to elements created by load()", () => {
+    const ctx = new FakeAudioContext();
+    const engine = new StemEngine(ctx as unknown as AudioContext);
+    engine.setTempo(0.6);
+    engine.load(URLS);
+    const audios = STEM_NAMES.map(
+      (n) => (engine as unknown as { audios: Record<string, FakeAudio> }).audios[n],
+    );
+    for (const a of audios) {
+      expect(a.playbackRate).toBeCloseTo(0.6, 5);
+      expect(a.preservesPitch).toBe(true);
+    }
   });
 });
