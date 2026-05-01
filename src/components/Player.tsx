@@ -32,7 +32,12 @@ export function Player({ songId }: PlayerProps) {
   const [isPlaying, setIsPlaying] = useState(false);
   const [duration, setDuration] = useState(0);
   const [tempo, setTempo] = useState(1);
-  const [loop, setLoopState] = useState<LoopRegion | null>(null);
+  // A and B are tracked independently. The engine only enters a real
+  // loop when both are set and a < b; otherwise the markers are display-only.
+  const [markA, setMarkA] = useState<number | null>(null);
+  const [markB, setMarkB] = useState<number | null>(null);
+  const loop: LoopRegion | null =
+    markA !== null && markB !== null && markB > markA ? { a: markA, b: markB } : null;
 
   // Load stems whenever songId changes.
   useEffect(() => {
@@ -132,28 +137,31 @@ export function Player({ songId }: PlayerProps) {
     const engine = engineRef.current;
     if (!engine) return;
     const a = engine.getCurrentTime();
-    const existingB = loop?.b;
-    // If we don't have a B yet, default to A + 4s (clamped to duration).
-    const b = existingB && existingB > a ? existingB : Math.min(a + 4, engine.duration);
-    if (b <= a) return;
-    engine.setLoop({ a, b });
-    setLoopState(engine.getLoop());
+    setMarkA(a);
+    // Activate the loop only if B is present and ahead of A.
+    if (markB !== null && markB > a) {
+      engine.setLoop({ a, b: markB });
+    } else {
+      engine.clearLoop();
+    }
   };
 
   const onSetB = () => {
     const engine = engineRef.current;
     if (!engine) return;
     const b = engine.getCurrentTime();
-    const existingA = loop?.a;
-    const a = existingA !== undefined && existingA < b ? existingA : Math.max(0, b - 4);
-    if (b <= a) return;
-    engine.setLoop({ a, b });
-    setLoopState(engine.getLoop());
+    setMarkB(b);
+    if (markA !== null && b > markA) {
+      engine.setLoop({ a: markA, b });
+    } else {
+      engine.clearLoop();
+    }
   };
 
   const onClearLoop = () => {
     engineRef.current?.clearLoop();
-    setLoopState(null);
+    setMarkA(null);
+    setMarkB(null);
   };
 
   if (load.kind === "loading") {
@@ -198,11 +206,11 @@ export function Player({ songId }: PlayerProps) {
             <Slider.HiddenInput />
           </Slider.Thumb>
         </Slider.Control>
-        {loop && (
+        {(markA !== null || markB !== null) && (
           <Slider.Marks
             marks={[
-              { value: loop.a, label: "A" },
-              { value: loop.b, label: "B" },
+              ...(markA !== null ? [{ value: markA, label: "A" }] : []),
+              ...(markB !== null ? [{ value: markB, label: "B" }] : []),
             ]}
           />
         )}
@@ -210,18 +218,25 @@ export function Player({ songId }: PlayerProps) {
 
       <HStack gap="2" alignItems="center" justifyContent="space-between">
         <HStack gap="2" alignItems="center">
-          <Button size="xs" variant="outline" onClick={onSetA}>
+          <Button size="xs" variant={markA !== null ? "solid" : "outline"} onClick={onSetA}>
             Set A
           </Button>
-          <Button size="xs" variant="outline" onClick={onSetB}>
+          <Button size="xs" variant={markB !== null ? "solid" : "outline"} onClick={onSetB}>
             Set B
           </Button>
-          <Button size="xs" variant="outline" onClick={onClearLoop} disabled={!loop}>
+          <Button
+            size="xs"
+            variant="outline"
+            onClick={onClearLoop}
+            disabled={markA === null && markB === null}
+          >
             Clear A-B
           </Button>
         </HStack>
         <styled.span fontSize="xs" opacity="0.7" fontVariantNumeric="tabular-nums">
-          {loop ? `Loop ${fmtTime(loop.a)} → ${fmtTime(loop.b)}` : "no loop"}
+          {loop
+            ? `Loop ${fmtTime(loop.a)} → ${fmtTime(loop.b)}`
+            : `A=${markA !== null ? fmtTime(markA) : "—"} · B=${markB !== null ? fmtTime(markB) : "—"}`}
         </styled.span>
       </HStack>
 
