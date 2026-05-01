@@ -17,6 +17,7 @@ import sys
 import time
 import traceback
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 JsonObject = dict[str, Any]
@@ -34,8 +35,40 @@ def handle_ping(_params: JsonObject) -> JsonObject:
     return {"timestamp": time.time(), "version": "0.1.0"}
 
 
+def handle_separate(params: JsonObject) -> JsonObject:
+    # Imported lazily so unit tests + `ping` don't pay the torch/demucs import cost.
+    from pipeline.separate import separate_song
+
+    song_id = _require_str(params, "song_id")
+    source_path = Path(_require_str(params, "source_path"))
+    out_dir = Path(_require_str(params, "out_dir"))
+    processing_version = _require_int(params, "processing_version")
+
+    return separate_song(
+        song_id=song_id,
+        source_path=source_path,
+        out_dir=out_dir,
+        processing_version=processing_version,
+    )
+
+
+def _require_str(params: JsonObject, key: str) -> str:
+    value = params.get(key)
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"missing or empty string param: {key}")
+    return value
+
+
+def _require_int(params: JsonObject, key: str) -> int:
+    value = params.get(key)
+    if not isinstance(value, int):
+        raise ValueError(f"missing or non-int param: {key}")
+    return value
+
+
 HANDLERS: dict[str, Handler] = {
     "ping": handle_ping,
+    "separate": handle_separate,
 }
 
 

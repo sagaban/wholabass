@@ -3,7 +3,11 @@ name = "wholabass-ml"
 version = "0.1.0"
 description = "ML sidecar for wholabass"
 requires-python = ">=3.11,<3.13"
-dependencies = []
+dependencies = [
+  "demucs>=4.0.1",
+  "soundfile>=0.13",
+  "torchcodec>=0.4",
+]
 
 [dependency-groups]
 dev = [
@@ -22,7 +26,11 @@ select = ["E", "F", "I", "B", "UP", "N", "RUF"]
 [tool.mypy]
 python_version = "3.11"
 strict = true
-files = ["server.py"]
+files = ["server.py", "pipeline"]
+
+[[tool.mypy.overrides]]
+module = ["demucs.*", "soundfile", "torchaudio", "torchaudio.*"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
