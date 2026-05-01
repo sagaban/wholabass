@@ -1,3 +1,4 @@
+import { dialog } from "./dialog";
 import { spinner } from "./spinner";
 import { absoluteCenter } from "./absolute-center";
 import { group } from "./group";
@@ -12,6 +13,7 @@ export const recipes = {
   switchRecipe,
   group,
   absoluteCenter,
-  spinner
+  spinner,
+  dialog
 }
 export const slotRecipes = {}

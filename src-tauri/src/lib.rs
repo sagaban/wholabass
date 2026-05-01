@@ -176,6 +176,12 @@ async fn list_library(app: AppHandle) -> Result<Vec<library::LibraryEntry>, Stri
 }
 
 #[tauri::command]
+async fn delete_song(song_id: String, app: AppHandle) -> Result<(), String> {
+    let library_root = library::resolve_root(&app).map_err(|e| e.to_string())?;
+    library::delete_song(&library_root, &song_id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 async fn read_stem(
     song_id: String,
     stem: String,
@@ -256,6 +262,7 @@ pub fn run() {
             ingest_file,
             ingest_url,
             list_library,
+            delete_song,
             read_stem
         ])
         .run(tauri::generate_context!())

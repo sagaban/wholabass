@@ -1,5 +1,6 @@
 export { AbsoluteCenter, type AbsoluteCenterProps } from "./absolute-center";
 export { Button, ButtonGroup, type ButtonGroupProps, type ButtonProps } from "./button";
+export * as Dialog from "./dialog";
 export { Group, type GroupProps } from "./group";
 export { Loader, type LoaderProps } from "./loader";
 export * as Slider from "./slider";

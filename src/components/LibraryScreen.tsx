@@ -5,7 +5,7 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { useNavigate } from "@tanstack/react-router";
 import { Box, HStack, Stack, VStack, styled } from "styled-system/jsx";
 import logoUrl from "@/assets/logo.png";
-import { Button } from "@/components/ui";
+import { Button, Dialog } from "@/components/ui";
 import { ThemeToggle } from "@/components/ThemeToggle";
 
 interface PingResult {
@@ -62,6 +62,8 @@ export function LibraryScreen() {
   const [entries, setEntries] = useState<LibraryEntry[] | null>(null);
   const [listError, setListError] = useState<string | null>(null);
   const [progress, setProgress] = useState<IngestProgress | null>(null);
+  const [pendingDelete, setPendingDelete] = useState<LibraryEntry | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const ingestingRef = useRef(false);
 
   // Sidecar ping (once on mount).
@@ -225,17 +227,38 @@ export function LibraryScreen() {
             <LibraryRow
               key={entry.song_id}
               entry={entry}
-              onClick={() =>
+              onOpen={() =>
                 void navigate({
                   to: "/play/$songId",
                   params: { songId: entry.song_id },
                   search: { title: entry.title },
                 })
               }
+              onDelete={() => {
+                setDeleteError(null);
+                setPendingDelete(entry);
+              }}
             />
           ))}
         </Stack>
       )}
+
+      <ConfirmDeleteDialog
+        entry={pendingDelete}
+        error={deleteError}
+        onCancel={() => setPendingDelete(null)}
+        onConfirm={async () => {
+          if (!pendingDelete) return;
+          try {
+            await invoke<void>("delete_song", { songId: pendingDelete.song_id });
+            setPendingDelete(null);
+            setDeleteError(null);
+            setRefreshKey((k) => k + 1);
+          } catch (err: unknown) {
+            setDeleteError(String(err));
+          }
+        }}
+      />
     </Box>
   );
 }
@@ -274,7 +297,15 @@ function titleFromPath(path: string): string {
   return dot > 0 ? base.slice(0, dot) : base;
 }
 
-function LibraryRow({ entry, onClick }: { entry: LibraryEntry; onClick: () => void }) {
+function LibraryRow({
+  entry,
+  onOpen,
+  onDelete,
+}: {
+  entry: LibraryEntry;
+  onOpen: () => void;
+  onDelete: () => void;
+}) {
   return (
     <HStack
       gap="3"
@@ -294,15 +325,73 @@ function LibraryRow({ entry, onClick }: { entry: LibraryEntry; onClick: () => vo
           {!entry.ready && " · stale"}
         </styled.div>
       </VStack>
-      <Button
-        size="sm"
-        variant={entry.ready ? "solid" : "outline"}
-        disabled={!entry.ready}
-        onClick={onClick}
-      >
-        Open
-      </Button>
+      <HStack gap="2">
+        <Button
+          size="sm"
+          variant={entry.ready ? "solid" : "outline"}
+          disabled={!entry.ready}
+          onClick={onOpen}
+        >
+          Open
+        </Button>
+        <Button size="sm" variant="outline" onClick={onDelete} aria-label={`delete ${entry.title}`}>
+          Delete
+        </Button>
+      </HStack>
     </HStack>
+  );
+}
+
+function ConfirmDeleteDialog({
+  entry,
+  error,
+  onCancel,
+  onConfirm,
+}: {
+  entry: LibraryEntry | null;
+  error: string | null;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <Dialog.Root
+      open={entry !== null}
+      onOpenChange={(d) => {
+        if (!d.open) onCancel();
+      }}
+    >
+      <Dialog.Backdrop />
+      <Dialog.Positioner>
+        <Dialog.Content>
+          <Stack gap="4" p="6">
+            <Stack gap="1">
+              <Dialog.Title>Delete this song?</Dialog.Title>
+              <Dialog.Description>
+                {entry ? (
+                  <>
+                    Removes <styled.code>{entry.song_id}</styled.code> ({entry.title}) and its stems
+                    from disk. This cannot be undone.
+                  </>
+                ) : null}
+              </Dialog.Description>
+            </Stack>
+            {error && (
+              <styled.p color="error" m="0" fontSize="sm">
+                {error}
+              </styled.p>
+            )}
+            <HStack gap="2" justifyContent="flex-end">
+              <Button size="sm" variant="outline" onClick={onCancel}>
+                Cancel
+              </Button>
+              <Button size="sm" colorPalette="red" onClick={onConfirm}>
+                Delete
+              </Button>
+            </HStack>
+          </Stack>
+        </Dialog.Content>
+      </Dialog.Positioner>
+    </Dialog.Root>
   );
 }
 

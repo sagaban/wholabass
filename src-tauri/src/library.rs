@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Manager};
 use thiserror::Error;
 
+use crate::ids::ID_HEX_LEN;
+
 #[derive(Debug, Error)]
 pub enum LibraryError {
     #[error("could not resolve app data dir: {0}")]
@@ -12,6 +14,29 @@ pub enum LibraryError {
     Io(#[from] std::io::Error),
     #[error("invalid stem name: {0}")]
     InvalidStem(String),
+    #[error("invalid song id: {0:?}")]
+    InvalidSongId(String),
+}
+
+/// Song ids are produced by `ids::song_id_from_*` (sha256 truncated to
+/// `ID_HEX_LEN` lowercase hex chars). Anything else is refused so an
+/// attacker-controlled id can't escape the library root.
+fn validate_song_id(id: &str) -> Result<(), LibraryError> {
+    if id.len() != ID_HEX_LEN || !id.chars().all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()) {
+        return Err(LibraryError::InvalidSongId(id.to_string()));
+    }
+    Ok(())
+}
+
+/// Remove `<root>/<id>/` recursively. No-op if the directory doesn't exist.
+pub fn delete_song(root: &Path, id: &str) -> Result<(), LibraryError> {
+    validate_song_id(id)?;
+    let dir = song_dir(root, id);
+    if !dir.exists() {
+        return Ok(());
+    }
+    std::fs::remove_dir_all(&dir)?;
+    Ok(())
 }
 
 /// `<app_data_dir>/library`.
@@ -262,6 +287,55 @@ mod tests {
         assert_eq!(meta.processing_version, 7);
         assert_eq!(meta.source.kind, "file");
         assert!((meta.duration - 12.34).abs() < 1e-9);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn validate_song_id_accepts_canonical() {
+        assert!(validate_song_id("abcdef012345").is_ok());
+    }
+
+    #[test]
+    fn validate_song_id_rejects_wrong_len() {
+        assert!(matches!(
+            validate_song_id("abc"),
+            Err(LibraryError::InvalidSongId(_))
+        ));
+        assert!(matches!(
+            validate_song_id("abcdef0123456"),
+            Err(LibraryError::InvalidSongId(_))
+        ));
+    }
+
+    #[test]
+    fn validate_song_id_rejects_traversal_or_uppercase() {
+        // Wrong char (slash, dot)
+        assert!(validate_song_id("../etc/pass").is_err());
+        // Uppercase hex — our ids are lowercase from `hex::encode`.
+        assert!(validate_song_id("ABCDEF012345").is_err());
+        // Right length, non-hex.
+        assert!(validate_song_id("zzzzzzzzzzzz").is_err());
+    }
+
+    #[test]
+    fn delete_song_removes_dir() {
+        let root = fresh_temp_root();
+        write_complete_cache(&root, "abcdef012345", 1);
+        assert!(song_dir(&root, "abcdef012345").exists());
+
+        delete_song(&root, "abcdef012345").unwrap();
+        assert!(!song_dir(&root, "abcdef012345").exists());
+
+        // Idempotent: deleting again succeeds.
+        delete_song(&root, "abcdef012345").unwrap();
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn delete_song_refuses_invalid_ids() {
+        let root = fresh_temp_root();
+        assert!(delete_song(&root, "../escape").is_err());
         std::fs::remove_dir_all(&root).ok();
     }
 
