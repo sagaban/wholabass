@@ -2,18 +2,10 @@ import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Box, HStack, VStack, styled } from "styled-system/jsx";
 import { Button, Slider } from "@/components/ui";
-import {
-  StemEngine,
-  STEM_NAMES,
-  type StemBuffers,
-  type StemName,
-} from "@/audio/engine";
+import { StemEngine, STEM_NAMES, type StemBuffers, type StemName } from "@/audio/engine";
 import { StemMixer } from "@/components/StemMixer";
 
-type LoadStatus =
-  | { kind: "loading" }
-  | { kind: "ready" }
-  | { kind: "error"; message: string };
+type LoadStatus = { kind: "loading" } | { kind: "ready" } | { kind: "error"; message: string };
 
 interface PlayerProps {
   songId: string;
@@ -154,10 +146,7 @@ export function Player({ songId }: PlayerProps) {
   );
 }
 
-async function loadStemBuffers(
-  ctx: AudioContext,
-  songId: string,
-): Promise<StemBuffers> {
+async function loadStemBuffers(ctx: AudioContext, songId: string): Promise<StemBuffers> {
   const entries = await Promise.all(
     STEM_NAMES.map(async (stem) => [stem, await loadStem(ctx, songId, stem)] as const),
   );
@@ -168,11 +157,7 @@ async function loadStemBuffers(
   return out;
 }
 
-async function loadStem(
-  ctx: AudioContext,
-  songId: string,
-  stem: StemName,
-): Promise<AudioBuffer> {
+async function loadStem(ctx: AudioContext, songId: string, stem: StemName): Promise<AudioBuffer> {
   const bytes = await invoke<ArrayBuffer>("read_stem", { songId, stem });
   // decodeAudioData detaches the input buffer on some platforms; copy to be safe.
   return ctx.decodeAudioData(bytes.slice(0));

@@ -79,13 +79,7 @@ export function StemMixer({ engine }: StemMixerProps) {
   );
 }
 
-function MasterStrip({
-  value,
-  onChange,
-}: {
-  value: number;
-  onChange: (v: number) => void;
-}) {
+function MasterStrip({ value, onChange }: { value: number; onChange: (v: number) => void }) {
   return (
     <Grid gridTemplateColumns={STRIP_GRID_COLS} alignItems="center" gap="2">
       <styled.div fontSize="sm" fontWeight="semibold">
@@ -122,13 +116,7 @@ interface StripProps {
   onToggleSolo: () => void;
 }
 
-function Strip({
-  stem,
-  state,
-  onVolumeChange,
-  onToggleMute,
-  onToggleSolo,
-}: StripProps) {
+function Strip({ stem, state, onVolumeChange, onToggleMute, onToggleSolo }: StripProps) {
   return (
     <Grid gridTemplateColumns={STRIP_GRID_COLS} alignItems="center" gap="2">
       <styled.div fontSize="sm" textTransform="capitalize">
@@ -181,12 +169,7 @@ function Strip({
 
 function ValueReadout({ children }: { children: React.ReactNode }) {
   return (
-    <styled.div
-      fontVariantNumeric="tabular-nums"
-      fontSize="xs"
-      opacity="0.7"
-      textAlign="right"
-    >
+    <styled.div fontVariantNumeric="tabular-nums" fontSize="xs" opacity="0.7" textAlign="right">
       {children}
     </styled.div>
   );

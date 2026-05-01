@@ -175,7 +175,7 @@ describe("StemEngine", () => {
   });
 
   test("STEM_NAMES contains the canonical four", () => {
-    expect([...STEM_NAMES].sort()).toEqual(["bass", "drums", "other", "vocals"]);
+    expect([...STEM_NAMES].toSorted()).toEqual(["bass", "drums", "other", "vocals"]);
   });
 });
 

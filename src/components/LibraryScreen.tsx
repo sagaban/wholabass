@@ -89,9 +89,7 @@ export function LibraryScreen({
             <LibraryRow
               key={entry.song_id}
               entry={entry}
-              onClick={() =>
-                onPick({ songId: entry.song_id, title: entry.title })
-              }
+              onClick={() => onPick({ songId: entry.song_id, title: entry.title })}
             />
           ))}
         </Stack>
@@ -100,13 +98,7 @@ export function LibraryScreen({
   );
 }
 
-function LibraryRow({
-  entry,
-  onClick,
-}: {
-  entry: LibraryEntry;
-  onClick: () => void;
-}) {
+function LibraryRow({ entry, onClick }: { entry: LibraryEntry; onClick: () => void }) {
   return (
     <HStack
       gap="3"
@@ -121,8 +113,8 @@ function LibraryRow({
       <VStack alignItems="flex-start" gap="0.5">
         <styled.div fontWeight="medium">{entry.title}</styled.div>
         <styled.div fontSize="xs" opacity="0.7">
-          <styled.code>{entry.song_id}</styled.code> ·{" "}
-          {fmtTime(entry.duration_sec)} · v{entry.processing_version}
+          <styled.code>{entry.song_id}</styled.code> · {fmtTime(entry.duration_sec)} · v
+          {entry.processing_version}
           {!entry.ready && " · stale"}
         </styled.div>
       </VStack>
@@ -138,13 +130,7 @@ function LibraryRow({
   );
 }
 
-function DropZone({
-  hovering,
-  ingest,
-}: {
-  hovering: boolean;
-  ingest: IngestStatus;
-}) {
+function DropZone({ hovering, ingest }: { hovering: boolean; ingest: IngestStatus }) {
   return (
     <Box
       as="section"

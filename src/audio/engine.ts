@@ -7,12 +7,7 @@
 
 export type StemName = "vocals" | "drums" | "bass" | "other";
 
-export const STEM_NAMES: readonly StemName[] = [
-  "vocals",
-  "drums",
-  "bass",
-  "other",
-] as const;
+export const STEM_NAMES: readonly StemName[] = ["vocals", "drums", "bass", "other"] as const;
 
 export type StemBuffers = Record<StemName, AudioBuffer>;
 
@@ -25,22 +20,14 @@ export type EngineState =
  * Pure time math. `ctxNow` is `audioContext.currentTime`; `duration` is the
  * stem length in seconds. Result is clamped to `[0, duration]`.
  */
-export function currentOffset(
-  state: EngineState,
-  ctxNow: number,
-  duration: number,
-): number {
+export function currentOffset(state: EngineState, ctxNow: number, duration: number): number {
   switch (state.kind) {
     case "stopped":
       return 0;
     case "paused":
       return clamp(state.offset, 0, duration);
     case "playing":
-      return clamp(
-        state.offsetAtStart + (ctxNow - state.ctxStartTime),
-        0,
-        duration,
-      );
+      return clamp(state.offsetAtStart + (ctxNow - state.ctxStartTime), 0, duration);
   }
 }
 
@@ -186,9 +173,7 @@ export class StemEngine {
 
   play(offset?: number): void {
     if (!this.buffers) return;
-    const startOffset =
-      offset ??
-      (this.state.kind === "paused" ? this.state.offset : 0);
+    const startOffset = offset ?? (this.state.kind === "paused" ? this.state.offset : 0);
     this.stopSources();
     const startTime = this.ctx.currentTime;
     for (const name of STEM_NAMES) {

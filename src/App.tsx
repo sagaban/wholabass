@@ -30,9 +30,7 @@ type IngestStatus =
   | { kind: "running"; path: string }
   | { kind: "error"; message: string };
 
-type Route =
-  | { kind: "library" }
-  | { kind: "player"; songId: string; title: string };
+type Route = { kind: "library" } | { kind: "player"; songId: string; title: string };
 
 export default function App() {
   const [sidecar, setSidecar] = useState<SidecarStatus>({ kind: "idle" });
@@ -113,9 +111,7 @@ export default function App() {
       ingest={ingest}
       refreshKey={refreshKey}
       sidecarLine={<SidecarLine status={sidecar} />}
-      onPick={({ songId, title }) =>
-        setRoute({ kind: "player", songId, title })
-      }
+      onPick={({ songId, title }) => setRoute({ kind: "player", songId, title })}
     />
   );
 }

@@ -1,7 +1,7 @@
 {
   "name": "wholabass",
-  "private": true,
   "version": "0.1.0",
+  "private": true,
   "type": "module",
   "scripts": {
     "prepare": "panda codegen",
@@ -9,8 +9,10 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "tauri": "DYLD_LIBRARY_PATH= tauri",
-    "lint": "eslint src",
-    "fmt": "prettier --write \"src/**/*.{ts,tsx,css,json}\"",
+    "lint": "oxlint",
+    "lint:fix": "oxlint --fix",
+    "fmt": "oxfmt",
+    "fmt:check": "oxfmt --check",
     "test": "vitest run",
     "test:watch": "vitest"
   },
@@ -28,8 +30,8 @@
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.1",
-    "eslint": "^10.2.1",
-    "prettier": "^3.8.3",
+    "oxfmt": "^0.47.0",
+    "oxlint": "^1.62.0",
     "typescript": "~6.0.3",
     "vite": "^8.0.10",
     "vitest": "^4.1.5"

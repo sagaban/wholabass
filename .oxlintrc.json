@@ -1,0 +1,45 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": [
+    "typescript",
+    "unicorn",
+    "oxc",
+    "react",
+    "react-perf",
+    "jsx-a11y",
+    "import",
+    "promise",
+    "vitest"
+  ],
+  "categories": {
+    "correctness": "error",
+    "suspicious": "error",
+    "perf": "warn"
+  },
+  "env": {
+    "builtin": true,
+    "browser": true,
+    "node": true
+  },
+  "ignorePatterns": [
+    "dist/",
+    "styled-system/",
+    "src/components/ui/",
+    "src/theme/",
+    "src-tauri/",
+    "ml/"
+  ],
+  "rules": {
+    "react/jsx-key": "error",
+    "react/jsx-no-undef": "error",
+    "react/react-in-jsx-scope": "off",
+    "react-perf/jsx-no-new-array-as-prop": "off",
+    "react-perf/jsx-no-new-object-as-prop": "off",
+    "react-perf/jsx-no-new-function-as-prop": "off",
+    "react-perf/jsx-no-jsx-as-prop": "off",
+    "react/exhaustive-deps": "warn",
+    "import/no-unassigned-import": "off",
+    "vitest/require-mock-type-parameters": "off",
+    "promise/always-return": "off"
+  }
+}

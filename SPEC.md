@@ -14,6 +14,7 @@ Personal use, single user. Multi-platform (macOS primary; Windows + Linux must w
 - Loop a 4-bar passage at 60% speed without changing pitch until it's clean.
 
 ### Non-goals
+
 - No distribution, telemetry, code signing, or auto-update.
 - No re-uploading downloaded audio anywhere.
 - No social / sharing / community features.
@@ -25,6 +26,7 @@ Personal use, single user. Multi-platform (macOS primary; Windows + Linux must w
 ## 2. Phased scope
 
 ### Phase 1 — MVP (the value prop without tabs)
+
 1. Ingest: paste YouTube URL **or** drag-drop local mp3/wav/m4a/flac.
 2. Pipeline: download (`yt-dlp`) → separate 4 stems (Demucs `htdemucs`) → transcribe bass stem to MIDI (`basic-pitch`).
 3. Library: every processed song persisted on disk; reopening a cached song skips reprocessing.
@@ -34,11 +36,13 @@ Personal use, single user. Multi-platform (macOS primary; Windows + Linux must w
 7. Progress UI for any task >1 s.
 
 ### Phase 2 — Tabs (read-only)
+
 - MIDI → 4-string bass tab via fingering optimizer (string/fret cost minimization, hand-position continuity).
 - Read-only scrolling tab view, beat/bar grid, synced to playhead.
 - Toggle between piano-roll and tab.
 
 ### Phase 3 — Editable tabs
+
 - Click a note → change string/fret, add/delete notes, shift octaves.
 - Edits persist to library.
 - Re-render tab without re-running ML.
@@ -61,21 +65,22 @@ Personal use, single user. Multi-platform (macOS primary; Windows + Linux must w
 
 ## 4. Tech stack
 
-| Layer | Choice | Why |
-|---|---|---|
-| Shell | **Tauri 2** | small binaries, Rust IPC, multi-platform |
-| Frontend | **React 19 + TypeScript + Vite** | familiar, fast HMR |
-| Styling | **Panda CSS** + **Park UI** (Ark UI primitives) | accessible components, type-safe tokens, zero-runtime CSS |
-| ML sidecar | **Python 3.11**, managed by **uv** | Demucs and basic-pitch are Python-native |
-| Download | `yt-dlp` | de-facto standard |
-| Separation | `demucs` (`htdemucs` model) | SOTA 4-stem |
-| Transcription | `basic-pitch` (Spotify) | best free pitch→MIDI |
-| Audio engine | Web Audio API (`AudioBufferSourceNode` per stem) | sample-accurate sync, native |
-| Time-stretch | `rubberband-wasm` (preferred) or `soundtouch-js` | pick after prototype |
-| Persistence | flat files + **SQLite** (`tauri-plugin-sql`) | metadata index + on-disk artifacts |
-| Piano-roll / tab | custom **Canvas** component | full control of scroll/zoom |
+| Layer            | Choice                                           | Why                                                       |
+| ---------------- | ------------------------------------------------ | --------------------------------------------------------- |
+| Shell            | **Tauri 2**                                      | small binaries, Rust IPC, multi-platform                  |
+| Frontend         | **React 19 + TypeScript + Vite**                 | familiar, fast HMR                                        |
+| Styling          | **Panda CSS** + **Park UI** (Ark UI primitives)  | accessible components, type-safe tokens, zero-runtime CSS |
+| ML sidecar       | **Python 3.11**, managed by **uv**               | Demucs and basic-pitch are Python-native                  |
+| Download         | `yt-dlp`                                         | de-facto standard                                         |
+| Separation       | `demucs` (`htdemucs` model)                      | SOTA 4-stem                                               |
+| Transcription    | `basic-pitch` (Spotify)                          | best free pitch→MIDI                                      |
+| Audio engine     | Web Audio API (`AudioBufferSourceNode` per stem) | sample-accurate sync, native                              |
+| Time-stretch     | `rubberband-wasm` (preferred) or `soundtouch-js` | pick after prototype                                      |
+| Persistence      | flat files + **SQLite** (`tauri-plugin-sql`)     | metadata index + on-disk artifacts                        |
+| Piano-roll / tab | custom **Canvas** component                      | full control of scroll/zoom                               |
 
 ### IPC: Rust ↔ Python
+
 Newline-delimited JSON over stdio. Long-running sidecar process reused across calls (model weights stay loaded).
 
 ```
@@ -150,6 +155,7 @@ wholabass/
 ```
 
 ### Library cache rules
+
 - `<song-id>` = first 12 chars of sha256 over the YouTube video id, or over file content for local files.
 - A song is "ready" iff `meta.json` + 4 stems + `bass.mid` all exist for the current `processing_version`.
 - If ready, skip pipeline. If `processing_version` mismatches, reprocess.
@@ -159,7 +165,7 @@ wholabass/
 
 ## 6. Code style
 
-- **TypeScript:** `strict: true`, no `any` (escape via library types only). ESLint + Prettier.
+- **TypeScript:** `strict: true`, no `any` (escape via library types only). **oxlint** for lint, **oxfmt** for format (no ESLint, no Prettier).
 - **React:** function components + hooks. One component per file. PascalCase filenames.
 - **Styling:** Panda CSS — `styled-system/jsx` primitives (`Box`, `Stack`, `Grid`, etc.), token-aware style props (`<Box p="4" rounded="md">`), `css({...})` for one-offs, recipes from `styled-system/recipes`. **Never** use the React inline `style` prop; the only carve-out is a runtime-computed value with no token equivalent. Park UI components live in `src/components/ui/` and are copy-pasted via the Park CLI, not npm-installed; treat them as project code that may be edited freely.
 - **Rust:** rustfmt + clippy (warnings fail CI).
@@ -172,14 +178,14 @@ wholabass/
 
 ## 7. Testing strategy
 
-| Layer | Tool | Scope |
-|---|---|---|
-| TS units | **vitest** | hooks, audio engine math, tab/MIDI helpers |
-| React components | **React Testing Library** | mixer + practice panel interactions |
-| E2E | **Playwright** | one happy-path: load fixture mp3 → play → A-B loop holds |
-| Rust | `cargo test` | `library` cache logic, IPC framing (mock Python) |
-| Python | `pytest` | pipeline wrappers on a checked-in <5 s fixture |
-| Smoke | `make smoke` | full pipeline on the fixture; runs in CI |
+| Layer            | Tool                      | Scope                                                    |
+| ---------------- | ------------------------- | -------------------------------------------------------- |
+| TS units         | **vitest**                | hooks, audio engine math, tab/MIDI helpers               |
+| React components | **React Testing Library** | mixer + practice panel interactions                      |
+| E2E              | **Playwright**            | one happy-path: load fixture mp3 → play → A-B loop holds |
+| Rust             | `cargo test`              | `library` cache logic, IPC framing (mock Python)         |
+| Python           | `pytest`                  | pipeline wrappers on a checked-in <5 s fixture           |
+| Smoke            | `make smoke`              | full pipeline on the fixture; runs in CI                 |
 
 - Don't test the ML models' accuracy — trust upstream. Test that we **call** them correctly and the artifacts land on disk.
 - Use a 5-second royalty-free clip in `ml/tests/fixtures/`. No copyrighted audio in the repo.
@@ -189,26 +195,28 @@ wholabass/
 
 ## 8. Commands (developer surface)
 
-| Command | Purpose |
-|---|---|
-| `pnpm install` | JS dependencies (also runs `panda codegen` via the `prepare` hook) |
-| `cd ml && uv sync` | Python venv + deps |
-| `pnpm tauri dev` | dev shell with HMR |
-| `pnpm tauri build` | platform binary |
-| `pnpm exec panda codegen` | regenerate `styled-system/` after editing theme/recipes |
-| `pnpm dlx @park-ui/cli add <name>` | add a Park UI component (writes to `src/components/ui/`) |
-| `pnpm test` | vitest |
-| `pnpm e2e` | Playwright |
-| `cd ml && uv run pytest` | Python tests |
-| `cd src-tauri && cargo test` | Rust tests |
-| `make smoke` | end-to-end on fixture |
-| `pnpm lint` / `pnpm fmt` | lint + format all languages |
+| Command                            | Purpose                                                            |
+| ---------------------------------- | ------------------------------------------------------------------ |
+| `pnpm install`                     | JS dependencies (also runs `panda codegen` via the `prepare` hook) |
+| `cd ml && uv sync`                 | Python venv + deps                                                 |
+| `pnpm tauri dev`                   | dev shell with HMR                                                 |
+| `pnpm tauri build`                 | platform binary                                                    |
+| `pnpm exec panda codegen`          | regenerate `styled-system/` after editing theme/recipes            |
+| `pnpm dlx @park-ui/cli add <name>` | add a Park UI component (writes to `src/components/ui/`)           |
+| `pnpm test`                        | vitest                                                             |
+| `pnpm e2e`                         | Playwright                                                         |
+| `cd ml && uv run pytest`           | Python tests                                                       |
+| `cd src-tauri && cargo test`       | Rust tests                                                         |
+| `make smoke`                       | end-to-end on fixture                                              |
+| `pnpm lint` / `pnpm lint:fix`      | oxlint over the frontend                                           |
+| `pnpm fmt` / `pnpm fmt:check`      | oxfmt over the frontend                                            |
 
 ---
 
 ## 9. Boundaries
 
 ### Always
+
 - Persist every artifact under `library/<id>/` and check the cache before reprocessing.
 - Stream progress to the UI for any task >1 s.
 - Keep the Python sidecar as a long-running process; reuse loaded model weights across calls.
@@ -218,6 +226,7 @@ wholabass/
 - Stay strictly within the current phase's scope.
 
 ### Ask first
+
 - Adding any cloud / remote dependency.
 - Changing the IPC contract format.
 - Switching off Tauri / React / Python.
@@ -226,6 +235,7 @@ wholabass/
 - Introducing a new top-level dependency in any of the three package managers.
 
 ### Never
+
 - Re-distribute or upload downloaded YouTube content.
 - Hardcode user data paths.
 - Block the UI thread for ML work.

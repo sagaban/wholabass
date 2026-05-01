@@ -8,12 +8,12 @@ See [SPEC.md](SPEC.md) for the full design and [tasks/plan.md](tasks/plan.md) fo
 
 ## Prerequisites
 
-| Tool   | Min version | Used for                            |
-| ------ | ----------- | ----------------------------------- |
-| Node   | 22.x        | Vite + React frontend               |
-| pnpm   | 10.x        | JS package manager                  |
-| Rust   | 1.77+       | Tauri shell                         |
-| uv     | 0.9+        | Python sidecar (auto-installs 3.11) |
+| Tool | Min version | Used for                            |
+| ---- | ----------- | ----------------------------------- |
+| Node | 22.x        | Vite + React frontend               |
+| pnpm | 10.x        | JS package manager                  |
+| Rust | 1.77+       | Tauri shell                         |
+| uv   | 0.9+        | Python sidecar (auto-installs 3.11) |
 
 On macOS:
 
@@ -80,15 +80,17 @@ Produces a platform binary under `src-tauri/target/release/bundle/`. macOS is th
 
 ## Test
 
-| Command                                | What it runs                              |
-| -------------------------------------- | ----------------------------------------- |
-| `cd src-tauri && cargo test`           | Rust unit + integration tests             |
-| `cd src-tauri && cargo clippy --all-targets -- -D warnings` | Rust lint  |
-| `cd ml && uv run pytest`               | Python sidecar tests                      |
-| `cd ml && uv run ruff check .`         | Python lint                               |
-| `cd ml && uv run mypy`                 | Python type check (strict)                |
-| `pnpm exec tsc --noEmit`               | TypeScript type check                     |
-| `pnpm build`                           | Frontend production build                 |
+| Command                                                     | What it runs                  |
+| ----------------------------------------------------------- | ----------------------------- |
+| `cd src-tauri && cargo test`                                | Rust unit + integration tests |
+| `cd src-tauri && cargo clippy --all-targets -- -D warnings` | Rust lint                     |
+| `cd ml && uv run pytest`                                    | Python sidecar tests          |
+| `cd ml && uv run ruff check .`                              | Python lint                   |
+| `cd ml && uv run mypy`                                      | Python type check (strict)    |
+| `pnpm exec tsc --noEmit`                                    | TypeScript type check         |
+| `pnpm lint` / `pnpm lint:fix`                               | oxlint                        |
+| `pnpm fmt` / `pnpm fmt:check`                               | oxfmt                         |
+| `pnpm build`                                                | Frontend production build     |
 
 The cargo integration test in `src-tauri/tests/sidecar_ping.rs` actually spawns the Python sidecar via `uv` and pings it end-to-end — so a failing one usually means the Python environment is broken.
 
