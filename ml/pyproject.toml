@@ -1,0 +1,29 @@
+[project]
+name = "wholabass-ml"
+version = "0.1.0"
+description = "ML sidecar for wholabass"
+requires-python = ">=3.11,<3.13"
+dependencies = []
+
+[dependency-groups]
+dev = [
+  "pytest>=8.0",
+  "ruff>=0.6",
+  "mypy>=1.10",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "N", "RUF"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+files = ["server.py"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

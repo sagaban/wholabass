@@ -1,0 +1,31 @@
+[package]
+name = "wholabass"
+version = "0.1.0"
+description = "Bass-practice desktop app"
+authors = ["Santiago"]
+edition = "2021"
+rust-version = "1.77"
+
+[lib]
+name = "wholabass_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.0.3", features = [] }
+
+[dependencies]
+tauri = { version = "2.1", features = [] }
+tauri-plugin-shell = "2.0"
+tauri-plugin-dialog = "2.0"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+url = "2.5"
+hex = "0.4"
+thiserror = "1"
+anyhow = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "process", "io-util", "sync", "time"] }
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
