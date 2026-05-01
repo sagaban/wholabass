@@ -132,6 +132,14 @@ impl Sidecar {
             bail!("malformed sidecar response: {value}");
         }
     }
+
+    /// Forcibly terminate the child process. After this returns the
+    /// sidecar is unusable — the caller should drop it and spawn a new one.
+    pub async fn kill_child(&self) {
+        let mut inner = self.inner.lock().await;
+        let _ = inner.child.start_kill();
+        let _ = inner.child.wait().await;
+    }
 }
 
 impl Drop for Sidecar {

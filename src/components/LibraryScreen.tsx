@@ -197,7 +197,19 @@ export function LibraryScreen() {
         }
       />
 
-      {ingest.kind === "running" && progress && <IngestProgressBar progress={progress} />}
+      {ingest.kind === "running" && progress && (
+        <IngestProgressBar
+          progress={progress}
+          onCancel={async () => {
+            try {
+              await invoke<string | null>("cancel_ingest");
+            } catch (err: unknown) {
+              console.error("cancel failed:", err);
+            }
+            setRefreshKey((k) => k + 1);
+          }}
+        />
+      )}
 
       <styled.h2 mt="8" mb="3" fontSize="md" fontWeight="semibold" opacity="0.85">
         Library
@@ -401,21 +413,59 @@ const STAGE_LABELS: Record<string, string> = {
   download_error: "Download failed — retrying",
   loading_model: "Loading separation model",
   loading_source: "Loading audio",
-  separating: "Separating stems (this takes a moment)",
+  separating: "Separating stems",
   writing_stems: "Writing stem files",
   done: "Finishing up",
 };
 
-function IngestProgressBar({ progress }: { progress: IngestProgress }) {
+/** Each stage maps into a fixed slice of the overall 0-100 bar. */
+const STAGE_RANGES: Record<string, [number, number]> = {
+  starting: [0, 3],
+  downloading: [3, 50],
+  download_error: [3, 3],
+  loading_model: [50, 55],
+  loading_source: [55, 58],
+  separating: [58, 90],
+  writing_stems: [90, 98],
+  done: [98, 100],
+};
+
+function overallPercent(stage: string, stagePct: number): number {
+  const [lo, hi] = STAGE_RANGES[stage] ?? [0, 100];
+  const local = Math.max(0, Math.min(100, stagePct));
+  return lo + ((hi - lo) * local) / 100;
+}
+
+function IngestProgressBar({
+  progress,
+  onCancel,
+}: {
+  progress: IngestProgress;
+  onCancel: () => void;
+}) {
   const [now, setNow] = useState(() => Date.now());
+  const [maxPct, setMaxPct] = useState(0);
+
   useEffect(() => {
     const id = setInterval(() => setNow(Date.now()), 250);
     return () => clearInterval(id);
   }, []);
 
+  // Reset the running-max when a new ingest starts.
+  useEffect(() => {
+    setMaxPct(0);
+  }, [progress.startedAt]);
+
+  // Clamp upward — yt-dlp resets the per-file ratio between fragments,
+  // so the raw "downloading" percent can dip; the bar must never pull back.
+  useEffect(() => {
+    const target = overallPercent(progress.stage, progress.progress);
+    setMaxPct((m) => (target > m ? target : m));
+  }, [progress.stage, progress.progress]);
+
   const elapsed = Math.max(0, (now - progress.startedAt) / 1000);
   const label = STAGE_LABELS[progress.stage] ?? progress.stage;
-  const pct = Math.max(0, Math.min(100, progress.progress));
+  const pct = maxPct;
 
   return (
     <Box mt="4" p="3" borderWidth="1px" borderColor="border" borderRadius="l2">
@@ -431,9 +481,14 @@ function IngestProgressBar({ progress }: { progress: IngestProgress }) {
           />
           <styled.span fontSize="sm">{label}…</styled.span>
         </HStack>
-        <styled.span fontSize="xs" opacity="0.7" fontVariantNumeric="tabular-nums">
-          {pct.toFixed(0)}% · {elapsed.toFixed(1)}s
-        </styled.span>
+        <HStack gap="3" alignItems="center">
+          <styled.span fontSize="xs" opacity="0.7" fontVariantNumeric="tabular-nums">
+            {pct.toFixed(0)}% · {elapsed.toFixed(1)}s
+          </styled.span>
+          <Button size="xs" variant="outline" onClick={onCancel}>
+            Cancel
+          </Button>
+        </HStack>
       </HStack>
       <Box w="full" h="1.5" bg="border" borderRadius="full" overflow="hidden">
         <Box h="full" bg="indigo.9" width={`${pct}%`} transition="width 200ms ease" />
@@ -445,7 +500,8 @@ function IngestProgressBar({ progress }: { progress: IngestProgress }) {
 function UrlInput({ ingest, onSubmit }: { ingest: IngestStatus; onSubmit: (url: string) => void }) {
   const [url, setUrl] = useState("");
   const trimmed = url.trim();
-  const disabled = ingest.kind === "running" || trimmed === "";
+  const running = ingest.kind === "running";
+  const disabled = running || trimmed === "";
   const submit = () => {
     if (!disabled) onSubmit(trimmed);
   };
@@ -457,6 +513,7 @@ function UrlInput({ ingest, onSubmit }: { ingest: IngestStatus; onSubmit: (url: 
         onKeyDown={(e) => {
           if (e.key === "Enter") submit();
         }}
+        readOnly={running}
         placeholder="…or paste a YouTube URL"
         flex="1"
         px="3"
@@ -467,6 +524,8 @@ function UrlInput({ ingest, onSubmit }: { ingest: IngestStatus; onSubmit: (url: 
         bg="canvas"
         color="fg.default"
         fontSize="md"
+        opacity={running ? 0.6 : 1}
+        cursor={running ? "not-allowed" : "text"}
         _placeholder={{ color: "fg.subtle" }}
         _focus={{ outline: "none", borderColor: "indigo.9" }}
       />

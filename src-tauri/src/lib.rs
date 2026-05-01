@@ -15,6 +15,7 @@ use crate::ipc::Sidecar;
 
 pub struct AppState {
     pub sidecar: Mutex<Option<Arc<Sidecar>>>,
+    pub current_ingest: Mutex<Option<String>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -79,7 +80,20 @@ async fn ingest_file(
         });
     }
 
-    let sc = take_sidecar(&state).await?;
+    *state.current_ingest.lock().await = Some(song_id.clone());
+    let result = run_separate(&state, &app, &song_id, &source_path, &out_dir).await;
+    *state.current_ingest.lock().await = None;
+    result
+}
+
+async fn run_separate(
+    state: &State<'_, AppState>,
+    app: &AppHandle,
+    song_id: &str,
+    source_path: &std::path::Path,
+    out_dir: &std::path::Path,
+) -> Result<IngestResult, String> {
+    let sc = take_sidecar(state).await?;
     let app_emit = app.clone();
     let resp = sc
         .call_with_progress(
@@ -95,7 +109,7 @@ async fn ingest_file(
         .await
         .map_err(|e| e.to_string())?;
 
-    parse_separate_response(&resp, &song_id, &out_dir)
+    parse_separate_response(&resp, song_id, out_dir)
 }
 
 #[tauri::command]
@@ -129,7 +143,21 @@ async fn ingest_url(
 
     let out_dir =
         library::ensure_song_dir(&library_root, &song_id).map_err(|e| e.to_string())?;
-    let sc = take_sidecar(&state).await?;
+
+    *state.current_ingest.lock().await = Some(song_id.clone());
+    let result = run_download_and_separate(&state, &app, &song_id, &url, &out_dir).await;
+    *state.current_ingest.lock().await = None;
+    result
+}
+
+async fn run_download_and_separate(
+    state: &State<'_, AppState>,
+    app: &AppHandle,
+    song_id: &str,
+    url: &str,
+    out_dir: &std::path::Path,
+) -> Result<IngestResult, String> {
+    let sc = take_sidecar(state).await?;
     let app_emit = app.clone();
 
     sc.call_with_progress(
@@ -159,7 +187,7 @@ async fn ingest_url(
         .await
         .map_err(|e| format!("separate: {e}"))?;
 
-    parse_separate_response(&resp, &song_id, &out_dir)
+    parse_separate_response(&resp, song_id, out_dir)
 }
 
 fn emit_progress(app: &AppHandle, progress: f64, stage: &str) {
@@ -179,6 +207,38 @@ async fn list_library(app: AppHandle) -> Result<Vec<library::LibraryEntry>, Stri
 async fn delete_song(song_id: String, app: AppHandle) -> Result<(), String> {
     let library_root = library::resolve_root(&app).map_err(|e| e.to_string())?;
     library::delete_song(&library_root, &song_id).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn cancel_ingest(
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<Option<String>, String> {
+    let song_id = state.current_ingest.lock().await.take();
+
+    // Kill the running sidecar (if any). The in-flight ingest_* command
+    // sees its IPC call fail and returns an error to the frontend.
+    let old = state.sidecar.lock().await.take();
+    if let Some(sc) = &old {
+        sc.kill_child().await;
+    }
+    drop(old);
+
+    // Spawn a fresh sidecar so the next ingest works.
+    match Sidecar::spawn().await {
+        Ok(sc) => {
+            *state.sidecar.lock().await = Some(Arc::new(sc));
+        }
+        Err(e) => eprintln!("respawn sidecar after cancel: {e:#}"),
+    }
+
+    // Best-effort cleanup of the partial library entry.
+    if let Some(id) = &song_id {
+        if let Ok(library_root) = library::resolve_root(&app) {
+            let _ = library::delete_song(&library_root, id);
+        }
+    }
+    Ok(song_id)
 }
 
 #[tauri::command]
@@ -241,6 +301,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState {
             sidecar: Mutex::new(None),
+            current_ingest: Mutex::new(None),
         })
         .setup(|app| {
             let handle = app.handle().clone();
@@ -261,6 +322,7 @@ pub fn run() {
             ping,
             ingest_file,
             ingest_url,
+            cancel_ingest,
             list_library,
             delete_song,
             read_stem
