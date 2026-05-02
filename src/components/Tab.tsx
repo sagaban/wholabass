@@ -13,6 +13,7 @@ import {
   totalWidth,
 } from "@/tab/render";
 import { fingerNotes, type TabNote } from "@/tab/optimizer";
+import { beamGroups, classifyNote, rhythmGlyph } from "@/tab/rhythm";
 
 interface TabProps {
   songId: string;
@@ -83,6 +84,9 @@ interface TabSurfaceProps {
 }
 
 const STRING_LABELS = ["E", "A", "D", "G"] as const;
+const STEM_LENGTH_PX = 14;
+const FLAG_LENGTH_PX = 5;
+const FLAG_GAP_PX = 3;
 
 function TabSurface({ tabNotes, beats, engine, durationSec }: TabSurfaceProps) {
   const layout = DEFAULT_LAYOUT;
@@ -95,6 +99,7 @@ function TabSurface({ tabNotes, beats, engine, durationSec }: TabSurfaceProps) {
     () => barLineTimes(beats.beats, layout.beatsPerBar),
     [beats.beats, layout.beatsPerBar],
   );
+  const groups = useMemo(() => beamGroups(tabNotes, beats.beats), [tabNotes, beats.beats]);
 
   // rAF loop: move the playhead and keep it visible.
   // While playing → hold the playhead at ~25% from the viewport's left edge.
@@ -204,10 +209,11 @@ function TabSurface({ tabNotes, beats, engine, durationSec }: TabSurfaceProps) {
             );
           })}
 
-          {/* Notes */}
+          {/* Fret numbers */}
           {tabNotes.map((n) => {
             const x = timeToX(n.startSec, layout);
             const y = stringIndexToY(n.string, layout);
+            const glyph = rhythmGlyph(classifyNote(n, beats.beats));
             const key = `${n.startSec.toFixed(4)}-${n.pitch}-${n.string}-${n.fret}`;
             return (
               <g key={key}>
@@ -231,6 +237,61 @@ function TabSurface({ tabNotes, beats, engine, durationSec }: TabSurfaceProps) {
                 >
                   {n.fret}
                 </text>
+                {glyph.dotted && (
+                  <circle cx={x + 8} cy={y + 1} r={1.4} fill="var(--colors-indigo-11)" />
+                )}
+              </g>
+            );
+          })}
+
+          {/* Rhythm: stems + beams (groups of ≥ 2) or flags (singletons) */}
+          {groups.map((g) => {
+            if (g.beamLevels === 0) return null;
+            const stemTop = stringIndexToY(0, layout) + 2;
+            const stemBottom = stringIndexToY(0, layout) + STEM_LENGTH_PX;
+            const xs = g.indices.map((i) => timeToX(tabNotes[i].startSec, layout));
+            const key = `beam-${xs[0].toFixed(2)}-${xs.length}-${g.beamLevels}`;
+            return (
+              <g key={key} stroke="var(--colors-fg-muted)" fill="none">
+                {xs.map((x) => (
+                  <line
+                    key={`stem-${x.toFixed(3)}`}
+                    x1={x}
+                    x2={x}
+                    y1={stemTop}
+                    y2={stemBottom}
+                    strokeWidth={1}
+                  />
+                ))}
+                {xs.length >= 2
+                  ? // Beam: one horizontal bar per beam level, stacked.
+                    Array.from({ length: g.beamLevels }, (_, b) => {
+                      const by = stemBottom - b * FLAG_GAP_PX;
+                      return (
+                        <line
+                          key={`beam-line-${by}`}
+                          x1={xs[0]}
+                          x2={xs[xs.length - 1]}
+                          y1={by}
+                          y2={by}
+                          strokeWidth={1.6}
+                        />
+                      );
+                    })
+                  : // Singleton short note: short flag pointing right.
+                    Array.from({ length: g.beamLevels }, (_, b) => {
+                      const fy = stemBottom - b * FLAG_GAP_PX;
+                      return (
+                        <line
+                          key={`flag-${fy}`}
+                          x1={xs[0]}
+                          x2={xs[0] + FLAG_LENGTH_PX}
+                          y1={fy}
+                          y2={fy}
+                          strokeWidth={1.4}
+                        />
+                      );
+                    })}
               </g>
             );
           })}
