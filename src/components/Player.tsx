@@ -15,6 +15,8 @@ import {
   type StemName,
   type StretcherNode,
 } from "@/audio/engine";
+import { loadBassNotes, type BassNote } from "@/audio/midi";
+import { MidiSynth } from "@/audio/midi-synth";
 import { StemMixer } from "@/components/StemMixer";
 import { PianoRoll } from "@/components/PianoRoll";
 import { Tab } from "@/components/Tab";
@@ -28,6 +30,8 @@ interface PlayerProps {
 export function Player({ songId }: PlayerProps) {
   const ctxRef = useRef<AudioContext | null>(null);
   const engineRef = useRef<StemEngine | null>(null);
+  const synthRef = useRef<MidiSynth | null>(null);
+  const bassNotesRef = useRef<BassNote[]>([]);
   const [load, setLoad] = useState<LoadStatus>({ kind: "loading" });
   const [position, setPosition] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -64,12 +68,20 @@ export function Player({ songId }: PlayerProps) {
             (c) => new SoundTouchNode(c) as unknown as StretcherNode,
           );
         }
+        if (!synthRef.current) {
+          synthRef.current = new MidiSynth(ctx);
+        }
 
-        const buffers = await loadStemBuffers(ctx, songId);
+        const [buffers, notes] = await Promise.all([
+          loadStemBuffers(ctx, songId),
+          loadBassNotes(songId).catch(() => [] as BassNote[]),
+        ]);
         if (cancelled) return;
 
         const engine = engineRef.current;
         engine.load(buffers);
+        bassNotesRef.current = notes;
+        synthRef.current.setNotes(notes);
         setDuration(engine.duration);
         setLoad({ kind: "ready" });
       } catch (err: unknown) {
@@ -83,6 +95,7 @@ export function Player({ songId }: PlayerProps) {
       cancelled = true;
       const engine = engineRef.current;
       if (engine?.isPlaying) engine.pause();
+      synthRef.current?.cancel();
     };
   }, [songId]);
 
@@ -95,7 +108,9 @@ export function Player({ songId }: PlayerProps) {
       if (engine) {
         // tickLoop returns true (and re-plays at A) when the playhead
         // crosses B; on the next read we pick up the looped position.
-        engine.tickLoop();
+        if (engine.tickLoop()) {
+          synthRef.current?.schedule(engine.getCurrentTime(), engine.getTempo());
+        }
         const t = engine.getCurrentTime();
         setPosition(t);
         if (t >= engine.duration && !engine.getLoop()) {
@@ -115,10 +130,12 @@ export function Player({ songId }: PlayerProps) {
     void ctxRef.current?.resume();
     if (engine.isPlaying) {
       engine.pause();
+      synthRef.current?.cancel();
       setPosition(engine.getCurrentTime());
       setIsPlaying(false);
     } else {
       engine.play();
+      synthRef.current?.schedule(engine.getCurrentTime(), engine.getTempo());
       setIsPlaying(true);
     }
   };
@@ -128,11 +145,20 @@ export function Player({ songId }: PlayerProps) {
     if (!engine || !engine.hasBuffers) return;
     engine.seek(value);
     setPosition(engine.getCurrentTime());
+    if (engine.isPlaying) {
+      synthRef.current?.schedule(engine.getCurrentTime(), engine.getTempo());
+    } else {
+      synthRef.current?.cancel();
+    }
   };
 
   const onTempo = (value: number) => {
     setTempo(value);
-    engineRef.current?.setTempo(value);
+    const engine = engineRef.current;
+    engine?.setTempo(value);
+    if (engine?.isPlaying) {
+      synthRef.current?.schedule(engine.getCurrentTime(), engine.getTempo());
+    }
   };
 
   const onSetA = () => {
@@ -284,7 +310,9 @@ export function Player({ songId }: PlayerProps) {
             </styled.span>
           </HStack>
 
-          {engineRef.current && <StemMixer engine={engineRef.current} />}
+          {engineRef.current && synthRef.current && (
+            <StemMixer engine={engineRef.current} synth={synthRef.current} />
+          )}
 
           <HStack justifyContent="flex-end">
             <Button size="xs" variant="subtle" onClick={() => setShowDebug((v) => !v)}>

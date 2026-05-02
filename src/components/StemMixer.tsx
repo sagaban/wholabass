@@ -1,10 +1,12 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Box, Divider, Grid, HStack, styled } from "styled-system/jsx";
 import { Button, Slider } from "@/components/ui";
 import { STEM_NAMES, type StemEngine, type StemName } from "@/audio/engine";
+import { type MidiSynth } from "@/audio/midi-synth";
 
 interface StemMixerProps {
   engine: StemEngine;
+  synth: MidiSynth;
 }
 
 interface StripState {
@@ -13,37 +15,56 @@ interface StripState {
   soloed: boolean;
 }
 
-const INITIAL_STRIP: StripState = { volume: 1, muted: false, soloed: false };
+type Track = StemName | "midi";
+const TRACKS: readonly Track[] = [...STEM_NAMES, "midi"] as const;
+
+const INITIAL_STEM_STRIP: StripState = { volume: 1, muted: false, soloed: false };
+// MIDI is silent by default — user opts in via volume or solo.
+const INITIAL_MIDI_STRIP: StripState = { volume: 0, muted: false, soloed: false };
 const STRIP_GRID_COLS = "70px 1fr 36px 70px";
 
-export function StemMixer({ engine }: StemMixerProps) {
-  const [strips, setStrips] = useState<Record<StemName, StripState>>({
-    vocals: INITIAL_STRIP,
-    drums: INITIAL_STRIP,
-    bass: INITIAL_STRIP,
-    other: INITIAL_STRIP,
+function effectiveTrackGain(strip: StripState, anySoloed: boolean): number {
+  if (strip.muted) return 0;
+  if (anySoloed && !strip.soloed) return 0;
+  return Math.max(0, Math.min(1, strip.volume));
+}
+
+export function StemMixer({ engine, synth }: StemMixerProps) {
+  const [strips, setStrips] = useState<Record<Track, StripState>>({
+    vocals: INITIAL_STEM_STRIP,
+    drums: INITIAL_STEM_STRIP,
+    bass: INITIAL_STEM_STRIP,
+    other: INITIAL_STEM_STRIP,
+    midi: INITIAL_MIDI_STRIP,
   });
   const [master, setMaster] = useState(1);
 
-  const update = (stem: StemName, patch: Partial<StripState>) => {
-    setStrips((s) => ({ ...s, [stem]: { ...s[stem], ...patch } }));
+  // The mixer owns the gating logic so solo semantics stretch across stems
+  // + the synth uniformly. We push the resulting per-track gain to the
+  // engine via setVolume (skipping its own muted/soloed bookkeeping) and
+  // to the synth via setMasterVolume.
+  useEffect(() => {
+    const anySoloed = TRACKS.some((t) => strips[t].soloed);
+    for (const stem of STEM_NAMES) {
+      engine.setVolume(stem, effectiveTrackGain(strips[stem], anySoloed));
+    }
+    synth.setMasterVolume(effectiveTrackGain(strips.midi, anySoloed));
+  }, [strips, engine, synth]);
+
+  const update = (track: Track, patch: Partial<StripState>) => {
+    setStrips((s) => ({ ...s, [track]: { ...s[track], ...patch } }));
   };
 
-  const onVolumeChange = (stem: StemName, value: number) => {
-    update(stem, { volume: value });
-    engine.setVolume(stem, value);
+  const onVolumeChange = (track: Track, value: number) => {
+    update(track, { volume: value });
   };
 
-  const onToggleMute = (stem: StemName) => {
-    const next = !strips[stem].muted;
-    update(stem, { muted: next });
-    engine.setMuted(stem, next);
+  const onToggleMute = (track: Track) => {
+    update(track, { muted: !strips[track].muted });
   };
 
-  const onToggleSolo = (stem: StemName) => {
-    const next = !strips[stem].soloed;
-    update(stem, { soloed: next });
-    engine.setSoloed(stem, next);
+  const onToggleSolo = (track: Track) => {
+    update(track, { soloed: !strips[track].soloed });
   };
 
   const onMasterChange = (value: number) => {
@@ -65,14 +86,14 @@ export function StemMixer({ engine }: StemMixerProps) {
     >
       <MasterStrip value={master} onChange={onMasterChange} />
       <Divider color="border" />
-      {STEM_NAMES.map((stem) => (
+      {TRACKS.map((track) => (
         <Strip
-          key={stem}
-          stem={stem}
-          state={strips[stem]}
-          onVolumeChange={(v) => onVolumeChange(stem, v)}
-          onToggleMute={() => onToggleMute(stem)}
-          onToggleSolo={() => onToggleSolo(stem)}
+          key={track}
+          track={track}
+          state={strips[track]}
+          onVolumeChange={(v) => onVolumeChange(track, v)}
+          onToggleMute={() => onToggleMute(track)}
+          onToggleSolo={() => onToggleSolo(track)}
         />
       ))}
     </Box>
@@ -109,18 +130,19 @@ function MasterStrip({ value, onChange }: { value: number; onChange: (v: number)
 }
 
 interface StripProps {
-  stem: StemName;
+  track: Track;
   state: StripState;
   onVolumeChange: (value: number) => void;
   onToggleMute: () => void;
   onToggleSolo: () => void;
 }
 
-function Strip({ stem, state, onVolumeChange, onToggleMute, onToggleSolo }: StripProps) {
+function Strip({ track, state, onVolumeChange, onToggleMute, onToggleSolo }: StripProps) {
+  const label = track === "midi" ? "MIDI" : track;
   return (
     <Grid gridTemplateColumns={STRIP_GRID_COLS} alignItems="center" gap="2">
-      <styled.div fontSize="sm" textTransform="capitalize">
-        {stem}
+      <styled.div fontSize="sm" textTransform={track === "midi" ? "none" : "capitalize"}>
+        {label}
       </styled.div>
 
       <Slider.Root
@@ -129,7 +151,7 @@ function Strip({ stem, state, onVolumeChange, onToggleMute, onToggleSolo }: Stri
         min={0}
         max={1}
         step={0.01}
-        aria-label={[`${stem} volume`]}
+        aria-label={[`${track} volume`]}
       >
         <Slider.Control>
           <Slider.Track>
@@ -149,7 +171,7 @@ function Strip({ stem, state, onVolumeChange, onToggleMute, onToggleSolo }: Stri
           variant={state.muted ? "solid" : "outline"}
           onClick={onToggleMute}
           aria-pressed={state.muted}
-          aria-label={`mute ${stem}`}
+          aria-label={`mute ${track}`}
         >
           M
         </Button>
@@ -158,7 +180,7 @@ function Strip({ stem, state, onVolumeChange, onToggleMute, onToggleSolo }: Stri
           variant={state.soloed ? "solid" : "outline"}
           onClick={onToggleSolo}
           aria-pressed={state.soloed}
-          aria-label={`solo ${stem}`}
+          aria-label={`solo ${track}`}
         >
           S
         </Button>
