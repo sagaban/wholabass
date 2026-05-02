@@ -4,7 +4,7 @@ use std::path::Path;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
-pub const PROCESSING_VERSION: u32 = 3;
+pub const PROCESSING_VERSION: u32 = 4;
 
 /// Length of the hex-encoded song id (sha256 truncated).
 pub const ID_HEX_LEN: usize = 12;

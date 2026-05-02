@@ -64,6 +64,46 @@ def test_dispatch_beats_via_server(
     assert (out_dir / "beats.json").is_file()
 
 
+def test_correct_doubled_tempo_halves_above_threshold() -> None:
+    # librosa often reports 2x the real BPM with beats spaced at the
+    # eighth-note grid; halving + decimating recovers the quarter grid.
+    tempo, decimated = beats._correct_doubled_tempo(
+        199.0, [0.0, 0.3, 0.6, 0.9, 1.2, 1.5, 1.8]
+    )
+    assert tempo == pytest.approx(99.5)
+    assert decimated == [0.0, 0.6, 1.2, 1.8]
+
+
+def test_correct_doubled_tempo_halves_quadrupled() -> None:
+    # 320 → 160 (still > threshold? no, threshold is exclusive) → stop. We
+    # halve once. 4x doublings shouldn't happen in practice; one pass is enough.
+    tempo, decimated = beats._correct_doubled_tempo(320.0, list(range(8)))
+    assert tempo == 160.0
+    assert decimated == [0, 2, 4, 6]
+
+
+def test_correct_doubled_tempo_leaves_normal_tempo_alone() -> None:
+    tempo, decimated = beats._correct_doubled_tempo(118.0, [0.0, 0.5, 1.0])
+    assert tempo == 118.0
+    assert decimated == [0.0, 0.5, 1.0]
+
+
+def test_track_beats_corrects_doubled_tempo(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        beats,
+        "_run_librosa",
+        lambda _p: (199.0, [0.0, 0.3, 0.6, 0.9, 1.2, 1.5]),
+    )
+    src = tmp_path / "source.wav"
+    src.write_bytes(b"x")
+    out_dir = tmp_path / "out"
+    result = beats.track_beats("abc", src, out_dir)
+    assert result["tempo_bpm"] == pytest.approx(99.5)
+    assert result["beat_count"] == 3
+
+
 def test_beats_rejects_missing_params() -> None:
     import server
 

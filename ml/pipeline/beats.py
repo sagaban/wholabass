@@ -23,6 +23,23 @@ def _run_librosa(source_path: Path) -> tuple[float, list[float]]:
     return float(tempo), [float(b) for b in beats]
 
 
+# librosa's beat tracker periodically locks onto the eighth-note grid
+# instead of the quarter-note one and reports double the real tempo.
+# Anything above this is much more likely a doubling than a real BPM
+# for typical pop / rock material; halve until we're back in range.
+TEMPO_DOUBLED_THRESHOLD = 160.0
+
+
+def _correct_doubled_tempo(
+    tempo_bpm: float, beats: list[float]
+) -> tuple[float, list[float]]:
+    """Halve tempo + decimate beats while tempo > threshold."""
+    while tempo_bpm > TEMPO_DOUBLED_THRESHOLD and len(beats) > 1:
+        tempo_bpm /= 2.0
+        beats = beats[::2]
+    return tempo_bpm, beats
+
+
 def track_beats(song_id: str, source_path: Path, out_dir: Path) -> dict[str, Any]:
     if not source_path.is_file():
         raise FileNotFoundError(f"source not found: {source_path}")
@@ -30,6 +47,7 @@ def track_beats(song_id: str, source_path: Path, out_dir: Path) -> dict[str, Any
 
     progress.emit(0.0, "tracking_beats")
     tempo_bpm, beats = _run_librosa(source_path)
+    tempo_bpm, beats = _correct_doubled_tempo(tempo_bpm, beats)
     progress.emit(95.0, "tracking_beats")
 
     payload = {"tempo_bpm": tempo_bpm, "beats": beats}
