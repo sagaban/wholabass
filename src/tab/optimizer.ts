@@ -37,9 +37,21 @@ export interface OptimizerOptions {
 /** E1 A1 D2 G2 — standard 4-string bass. */
 export const DEFAULT_TUNING: readonly number[] = [28, 33, 38, 43] as const;
 
-interface Placement {
+export interface Placement {
   string: number;
   fret: number;
+}
+
+/**
+ * Every valid `(string, fret)` pair for a pitch in the given tuning,
+ * sorted by string. Used by the edit popover to offer alternates.
+ */
+export function enumeratePlacements(
+  pitch: number,
+  tuning: readonly number[] = DEFAULT_TUNING,
+  maxFret = 12,
+): Placement[] {
+  return placementsFor(pitch, tuning, maxFret);
 }
 
 function placementsFor(pitch: number, tuning: readonly number[], maxFret: number): Placement[] {

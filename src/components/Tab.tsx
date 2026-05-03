@@ -1,9 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Box } from "styled-system/jsx";
+import { Box, HStack, styled } from "styled-system/jsx";
 import { css } from "styled-system/css";
 import { type StemEngine } from "@/audio/engine";
 import { loadBassNotes, type BassNote } from "@/audio/midi";
+import { Portal } from "@ark-ui/react/portal";
+import { Button, Popover } from "@/components/ui";
 import {
   barLineTimes,
   DEFAULT_LAYOUT,
@@ -12,8 +14,17 @@ import {
   totalHeight,
   totalWidth,
 } from "@/tab/render";
-import { fingerNotes, type TabNote } from "@/tab/optimizer";
+import { DEFAULT_TUNING, enumeratePlacements, fingerNotes, type TabNote } from "@/tab/optimizer";
 import { beamGroups, classifyNote, rhythmGlyph } from "@/tab/rhythm";
+import {
+  EMPTY_EDITS,
+  applyEdits,
+  tabNoteId,
+  upsertEdit,
+  type EditOp,
+  type EditsFile,
+  type NoteId,
+} from "@/tab/edits";
 
 interface TabProps {
   songId: string;
@@ -28,24 +39,32 @@ interface BeatsPayload {
 
 type LoadStatus = "loading" | "ready" | { kind: "error"; message: string };
 
-export function Tab({ songId, engine, durationSec }: TabProps) {
-  const [tabNotes, setTabNotes] = useState<TabNote[]>([]);
-  const [beats, setBeats] = useState<BeatsPayload | null>(null);
-  const [status, setStatus] = useState<LoadStatus>("loading");
+const AUTOSAVE_DELAY_MS = 500;
 
-  // Fetch MIDI + beats whenever the song changes; run the optimizer.
+export function Tab({ songId, engine, durationSec }: TabProps) {
+  const [optimizerNotes, setOptimizerNotes] = useState<TabNote[]>([]);
+  const [beats, setBeats] = useState<BeatsPayload | null>(null);
+  const [edits, setEdits] = useState<EditsFile>(EMPTY_EDITS);
+  const [status, setStatus] = useState<LoadStatus>("loading");
+  // Skip the autosave when edits are first hydrated from disk — only
+  // user mutations should trigger a write.
+  const dirtyRef = useRef(false);
+
   useEffect(() => {
     let cancelled = false;
     setStatus("loading");
+    dirtyRef.current = false;
     void (async () => {
       try {
-        const [notes, b] = await Promise.all([
+        const [notes, b, e] = await Promise.all([
           loadBassNotes(songId),
           invoke<BeatsPayload>("read_beats", { songId }),
+          invoke<EditsFile>("read_edits", { songId }),
         ]);
         if (cancelled) return;
-        setTabNotes(fingerNotes(notes as readonly BassNote[]));
+        setOptimizerNotes(fingerNotes(notes as readonly BassNote[]));
         setBeats(b);
+        setEdits(normalizeEdits(e));
         setStatus("ready");
       } catch (err: unknown) {
         if (!cancelled) setStatus({ kind: "error", message: String(err) });
@@ -55,6 +74,24 @@ export function Tab({ songId, engine, durationSec }: TabProps) {
       cancelled = true;
     };
   }, [songId]);
+
+  // Debounced autosave: every mutation schedules a write, replacing any
+  // pending one. On unmount or song-change we flush immediately so a
+  // quick edit + close doesn't lose the change.
+  useEffect(() => {
+    if (!dirtyRef.current) return;
+    const timer = setTimeout(() => {
+      void invoke("write_edits", { songId, edits });
+    }, AUTOSAVE_DELAY_MS);
+    return () => clearTimeout(timer);
+  }, [edits, songId]);
+
+  const displayNotes = useMemo(() => applyEdits(optimizerNotes, edits), [optimizerNotes, edits]);
+
+  const handleEdit = useCallback((op: EditOp) => {
+    dirtyRef.current = true;
+    setEdits((prev) => ({ ...prev, notes: upsertEdit(prev.notes, op) }));
+  }, []);
 
   if (status === "loading") {
     return (
@@ -72,8 +109,24 @@ export function Tab({ songId, engine, durationSec }: TabProps) {
   }
 
   return (
-    <TabSurface tabNotes={tabNotes} beats={beats!} engine={engine} durationSec={durationSec} />
+    <TabSurface
+      tabNotes={displayNotes}
+      beats={beats!}
+      engine={engine}
+      durationSec={durationSec}
+      onEdit={handleEdit}
+    />
   );
+}
+
+function normalizeEdits(raw: unknown): EditsFile {
+  if (!raw || typeof raw !== "object") return EMPTY_EDITS;
+  const r = raw as Partial<EditsFile>;
+  return {
+    version: typeof r.version === "number" ? r.version : EMPTY_EDITS.version,
+    notes: Array.isArray(r.notes) ? (r.notes as EditOp[]) : [],
+    sections: Array.isArray(r.sections) ? r.sections : [],
+  };
 }
 
 interface TabSurfaceProps {
@@ -81,6 +134,7 @@ interface TabSurfaceProps {
   beats: BeatsPayload;
   engine: StemEngine;
   durationSec: number;
+  onEdit: (op: EditOp) => void;
 }
 
 const STRING_LABELS = ["E", "A", "D", "G"] as const;
@@ -88,7 +142,7 @@ const STEM_LENGTH_PX = 14;
 const FLAG_LENGTH_PX = 5;
 const FLAG_GAP_PX = 3;
 
-function TabSurface({ tabNotes, beats, engine, durationSec }: TabSurfaceProps) {
+function TabSurface({ tabNotes, beats, engine, durationSec, onEdit }: TabSurfaceProps) {
   const layout = DEFAULT_LAYOUT;
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const playheadRef = useRef<SVGLineElement | null>(null);
@@ -100,6 +154,13 @@ function TabSurface({ tabNotes, beats, engine, durationSec }: TabSurfaceProps) {
     [beats.beats, layout.beatsPerBar],
   );
   const groups = useMemo(() => beamGroups(tabNotes, beats.beats), [tabNotes, beats.beats]);
+
+  const [selectedId, setSelectedId] = useState<NoteId | null>(null);
+  const selectedNote = useMemo(
+    () => (selectedId ? (tabNotes.find((n) => tabNoteId(n) === selectedId) ?? null) : null),
+    [selectedId, tabNotes],
+  );
+  const closePopover = useCallback(() => setSelectedId(null), []);
 
   // rAF loop: move the playhead and keep it visible.
   // While playing → hold the playhead at ~25% from the viewport's left edge.
@@ -141,6 +202,7 @@ function TabSurface({ tabNotes, beats, engine, durationSec }: TabSurfaceProps) {
       </Box>
       <Box
         ref={scrollRef}
+        position="relative"
         borderWidth="1px"
         borderColor="border"
         borderRadius="l2"
@@ -209,14 +271,22 @@ function TabSurface({ tabNotes, beats, engine, durationSec }: TabSurfaceProps) {
             );
           })}
 
-          {/* Fret numbers */}
+          {/* Fret numbers — click to edit */}
           {tabNotes.map((n) => {
             const x = timeToX(n.startSec, layout);
             const y = stringIndexToY(n.string, layout);
             const glyph = rhythmGlyph(classifyNote(n, beats.beats));
-            const key = `${n.startSec.toFixed(4)}-${n.pitch}-${n.string}-${n.fret}`;
+            const id = tabNoteId(n);
+            const isSelected = id === selectedId;
             return (
-              <g key={key}>
+              <g
+                key={id}
+                onClick={(ev) => {
+                  ev.stopPropagation();
+                  setSelectedId(id);
+                }}
+                className={css({ cursor: "pointer" })}
+              >
                 {/* tiny background so the fret number is readable on the line */}
                 <rect
                   x={x - 7}
@@ -224,7 +294,7 @@ function TabSurface({ tabNotes, beats, engine, durationSec }: TabSurfaceProps) {
                   width={14}
                   height={16}
                   rx={3}
-                  fill="var(--colors-canvas)"
+                  fill={isSelected ? "var(--colors-indigo-3)" : "var(--colors-canvas)"}
                 />
                 <text
                   x={x}
@@ -307,7 +377,162 @@ function TabSurface({ tabNotes, beats, engine, durationSec }: TabSurfaceProps) {
             strokeWidth={2}
           />
         </svg>
+
+        {selectedNote && (
+          <NoteEditPopover
+            note={selectedNote}
+            anchorX={timeToX(selectedNote.startSec, layout)}
+            anchorY={stringIndexToY(selectedNote.string, layout)}
+            onEdit={onEdit}
+            onClose={closePopover}
+          />
+        )}
       </Box>
     </Box>
+  );
+}
+
+interface NoteEditPopoverProps {
+  note: TabNote;
+  anchorX: number;
+  anchorY: number;
+  onEdit: (op: EditOp) => void;
+  onClose: () => void;
+}
+
+function NoteEditPopover({ note, anchorX, anchorY, onEdit, onClose }: NoteEditPopoverProps) {
+  const id = tabNoteId(note);
+  const placements = useMemo(
+    () => enumeratePlacements(note.pitch, DEFAULT_TUNING, 12),
+    [note.pitch],
+  );
+  const octaveUp = useMemo(
+    () => enumeratePlacements(note.pitch + 12, DEFAULT_TUNING, 12)[0] ?? null,
+    [note.pitch],
+  );
+  const octaveDown = useMemo(
+    () => enumeratePlacements(note.pitch - 12, DEFAULT_TUNING, 12)[0] ?? null,
+    [note.pitch],
+  );
+
+  return (
+    <Popover.Root
+      open
+      onOpenChange={(d) => {
+        if (!d.open) onClose();
+      }}
+      positioning={{ placement: "top" }}
+    >
+      <Popover.Anchor asChild>
+        <styled.div
+          position="absolute"
+          width="14px"
+          height="16px"
+          pointerEvents="none"
+          style={{ left: `${anchorX - 7}px`, top: `${anchorY - 8}px` }}
+        />
+      </Popover.Anchor>
+      <Portal>
+        <Popover.Positioner>
+          <Popover.Content>
+            <Popover.Title>
+              <styled.span fontSize="xs" opacity="0.7">
+                pitch {note.pitch} · current {STRING_LABELS[note.string]}
+                {note.fret}
+              </styled.span>
+            </Popover.Title>
+            <Popover.Body>
+              <styled.div fontSize="xs" opacity="0.7" mb="1">
+                alternates
+              </styled.div>
+              <HStack gap="1" flexWrap="wrap" mb="3">
+                {placements.length === 0 ? (
+                  <styled.span fontSize="xs" opacity="0.5">
+                    none in range
+                  </styled.span>
+                ) : (
+                  placements.map((p) => {
+                    const isCurrent = p.string === note.string && p.fret === note.fret;
+                    return (
+                      <Button
+                        key={`${p.string}-${p.fret}`}
+                        size="xs"
+                        variant={isCurrent ? "solid" : "outline"}
+                        onClick={() => {
+                          if (isCurrent) return;
+                          onEdit({ kind: "replace", id, string: p.string, fret: p.fret });
+                        }}
+                      >
+                        {STRING_LABELS[p.string]}
+                        {p.fret}
+                      </Button>
+                    );
+                  })
+                )}
+              </HStack>
+              <HStack gap="1" justifyContent="space-between">
+                <HStack gap="1">
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    disabled={!octaveDown}
+                    onClick={() => {
+                      if (!octaveDown) return;
+                      onEdit({
+                        kind: "add",
+                        id: tabNoteId({ startSec: note.startSec, pitch: note.pitch - 12 }),
+                        pitch: note.pitch - 12,
+                        startSec: note.startSec,
+                        durSec: note.durSec,
+                        velocity: note.velocity,
+                        string: octaveDown.string,
+                        fret: octaveDown.fret,
+                      });
+                      onEdit({ kind: "delete", id });
+                      onClose();
+                    }}
+                  >
+                    Oct −
+                  </Button>
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    disabled={!octaveUp}
+                    onClick={() => {
+                      if (!octaveUp) return;
+                      onEdit({
+                        kind: "add",
+                        id: tabNoteId({ startSec: note.startSec, pitch: note.pitch + 12 }),
+                        pitch: note.pitch + 12,
+                        startSec: note.startSec,
+                        durSec: note.durSec,
+                        velocity: note.velocity,
+                        string: octaveUp.string,
+                        fret: octaveUp.fret,
+                      });
+                      onEdit({ kind: "delete", id });
+                      onClose();
+                    }}
+                  >
+                    Oct +
+                  </Button>
+                </HStack>
+                <Button
+                  size="xs"
+                  variant="outline"
+                  colorPalette="red"
+                  onClick={() => {
+                    onEdit({ kind: "delete", id });
+                    onClose();
+                  }}
+                >
+                  Delete
+                </Button>
+              </HStack>
+            </Popover.Body>
+          </Popover.Content>
+        </Popover.Positioner>
+      </Portal>
+    </Popover.Root>
   );
 }

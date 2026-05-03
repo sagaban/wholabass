@@ -1,3 +1,4 @@
+import { popover } from "./popover";
 import { dialog } from "./dialog";
 import { spinner } from "./spinner";
 import { absoluteCenter } from "./absolute-center";
@@ -14,6 +15,7 @@ export const recipes = {
   group,
   absoluteCenter,
   spinner,
-  dialog
+  dialog,
+  popover
 }
 export const slotRecipes = {}

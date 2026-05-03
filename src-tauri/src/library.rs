@@ -127,6 +127,11 @@ pub fn has_beats(root: &Path, id: &str) -> bool {
     beats_path(root, id).is_file()
 }
 
+/// `<root>/<id>/bass.tab.edits.json` (Phase 3 — user edits overlay).
+pub fn edits_path(root: &Path, id: &str) -> PathBuf {
+    song_dir(root, id).join("bass.tab.edits.json")
+}
+
 /// Rewrite `<root>/<id>/meta.json` with `processing_version` set to the
 /// supplied value. Used by the retry path when artifacts on disk are
 /// already complete but were produced under an older version — we mark
@@ -343,6 +348,16 @@ mod tests {
         write_complete_cache(&root, "abc", 1);
         std::fs::remove_file(beats_path(&root, "abc")).unwrap();
         assert!(!is_ready(&root, "abc", 1));
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn edits_path_lives_under_song_dir() {
+        let root = fresh_temp_root();
+        ensure_song_dir(&root, "abc").unwrap();
+        let path = edits_path(&root, "abc");
+        assert_eq!(path.file_name().unwrap(), "bass.tab.edits.json");
+        assert_eq!(path.parent().unwrap(), song_dir(&root, "abc"));
         std::fs::remove_dir_all(&root).ok();
     }
 

@@ -3,6 +3,7 @@ export { Button, ButtonGroup, type ButtonGroupProps, type ButtonProps } from "./
 export * as Dialog from "./dialog";
 export { Group, type GroupProps } from "./group";
 export { Loader, type LoaderProps } from "./loader";
+export * as Popover from "./popover";
 export * as Slider from "./slider";
 export { Span, type SpanProps } from "./span";
 export { Spinner, type SpinnerProps } from "./spinner";

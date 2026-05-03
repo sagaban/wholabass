@@ -442,6 +442,42 @@ async fn read_beats(song_id: String, app: AppHandle) -> Result<Value, String> {
     serde_json::from_str(&text).map_err(|e| format!("parse {}: {e}", path.display()))
 }
 
+/// Read the user-edits overlay. Missing file → empty edits skeleton, so
+/// the frontend always has something to render against.
+#[tauri::command]
+async fn read_edits(song_id: String, app: AppHandle) -> Result<Value, String> {
+    let library_root = library::resolve_root(&app).map_err(|e| e.to_string())?;
+    let path = library::edits_path(&library_root, &song_id);
+    match tokio::fs::read_to_string(&path).await {
+        Ok(text) => {
+            serde_json::from_str(&text).map_err(|e| format!("parse {}: {e}", path.display()))
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            Ok(serde_json::json!({"version": 1, "notes": [], "sections": []}))
+        }
+        Err(err) => Err(format!("read {}: {err}", path.display())),
+    }
+}
+
+/// Write the user-edits overlay. We do NOT validate the schema here —
+/// the frontend is the source of truth for shape, and forcing Rust
+/// to know about every edit kind would couple the two ends. Tauri
+/// already JSON-roundtrips the payload, so this is just a passthrough
+/// to disk with directory creation for safety.
+#[tauri::command]
+async fn write_edits(song_id: String, edits: Value, app: AppHandle) -> Result<(), String> {
+    let library_root = library::resolve_root(&app).map_err(|e| e.to_string())?;
+    let dir = library::song_dir(&library_root, &song_id);
+    if !dir.is_dir() {
+        return Err(format!("song dir missing for {song_id}"));
+    }
+    let path = library::edits_path(&library_root, &song_id);
+    let bytes = serde_json::to_vec_pretty(&edits).map_err(|e| e.to_string())?;
+    tokio::fs::write(&path, bytes)
+        .await
+        .map_err(|e| format!("write {}: {e}", path.display()))
+}
+
 async fn take_sidecar(state: &State<'_, AppState>) -> Result<Arc<Sidecar>, String> {
     // The sidecar is spawned in a background task at startup; give it a moment
     // on first call rather than failing immediately if the user is fast.
@@ -522,6 +558,8 @@ pub fn run() {
             read_stem,
             read_midi,
             read_beats,
+            read_edits,
+            write_edits,
             models_status
         ])
         .run(tauri::generate_context!())
