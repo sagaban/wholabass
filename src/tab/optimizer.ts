@@ -24,7 +24,7 @@ export interface OptimizerOptions {
   tuning?: readonly number[];
   /** Semitone shift applied to every input pitch before placing. */
   octaveShift?: number;
-  /** Reject placements above this fret. Default 12. */
+  /** Reject placements above this fret. Default 24 (full bass neck). */
   maxFret?: number;
   /** Region around which placements are pulled. Default 5. */
   preferredFret?: number;
@@ -49,7 +49,7 @@ export interface Placement {
 export function enumeratePlacements(
   pitch: number,
   tuning: readonly number[] = DEFAULT_TUNING,
-  maxFret = 12,
+  maxFret = 24,
 ): Placement[] {
   return placementsFor(pitch, tuning, maxFret);
 }
@@ -86,7 +86,7 @@ export function fingerNotes(notes: readonly BassNote[], options: OptimizerOption
 
   const tuning = options.tuning ?? DEFAULT_TUNING;
   const octaveShift = options.octaveShift ?? 0;
-  const maxFret = options.maxFret ?? 12;
+  const maxFret = options.maxFret ?? 24;
   const preferredFret = options.preferredFret ?? 5;
   const stringSwitchPenalty = options.stringSwitchPenalty ?? 0.5;
   const regionWeight = options.regionWeight ?? 0.3;

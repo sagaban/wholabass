@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { SoundTouchNode } from "@soundtouchjs/audio-worklet";
 // Vite ?url returns the URL of the worklet processor file so it can be
@@ -6,7 +6,7 @@ import { SoundTouchNode } from "@soundtouchjs/audio-worklet";
 // exports `./processor` as the public entry for this file.
 import processorUrl from "@soundtouchjs/audio-worklet/processor?url";
 import { Box, Grid, GridItem, HStack, VStack, styled } from "styled-system/jsx";
-import { Button, Slider } from "@/components/ui";
+import { Button, Dialog, Slider } from "@/components/ui";
 import {
   StemEngine,
   STEM_NAMES,
@@ -20,11 +20,29 @@ import { MidiSynth } from "@/audio/midi-synth";
 import { StemMixer } from "@/components/StemMixer";
 import { PianoRoll } from "@/components/PianoRoll";
 import { Tab } from "@/components/Tab";
+import {
+  EMPTY_EDITS,
+  addSection,
+  removeSectionAt,
+  upsertEdit,
+  type EditOp,
+  type EditsFile,
+} from "@/tab/edits";
 
 type LoadStatus = { kind: "loading" } | { kind: "ready" } | { kind: "error"; message: string };
 
 interface PlayerProps {
   songId: string;
+}
+
+function normalizeEditsFile(raw: unknown): EditsFile {
+  if (!raw || typeof raw !== "object") return EMPTY_EDITS;
+  const r = raw as Partial<EditsFile>;
+  return {
+    version: typeof r.version === "number" ? r.version : EMPTY_EDITS.version,
+    notes: Array.isArray(r.notes) ? (r.notes as EditOp[]) : [],
+    sections: Array.isArray(r.sections) ? r.sections : [],
+  };
 }
 
 export function Player({ songId }: PlayerProps) {
@@ -44,6 +62,66 @@ export function Player({ songId }: PlayerProps) {
   const [markB, setMarkB] = useState<number | null>(null);
   const loop: LoopRegion | null =
     markA !== null && markB !== null && markB > markA ? { a: markA, b: markB } : null;
+
+  // Edits overlay (Phase 3). Lives at the Player level so the section
+  // dialog has access to the A-B markers; Tab consumes it via props and
+  // never writes to disk on its own.
+  const [edits, setEdits] = useState<EditsFile>(EMPTY_EDITS);
+  const editsDirtyRef = useRef(false);
+  const [sectionDialogOpen, setSectionDialogOpen] = useState(false);
+
+  const onEdit = useCallback((op: EditOp) => {
+    editsDirtyRef.current = true;
+    setEdits((prev) => ({ ...prev, notes: upsertEdit(prev.notes, op) }));
+  }, []);
+
+  const onAddSection = useCallback(
+    (name: string, repeats?: number) => {
+      if (markA === null || markB === null || markB <= markA) return;
+      editsDirtyRef.current = true;
+      setEdits((prev) => ({
+        ...prev,
+        sections: addSection(prev.sections, {
+          startSec: markA,
+          endSec: markB,
+          name,
+          repeats: repeats && repeats > 1 ? repeats : undefined,
+        }),
+      }));
+    },
+    [markA, markB],
+  );
+
+  const onRemoveSectionAt = useCallback((index: number) => {
+    editsDirtyRef.current = true;
+    setEdits((prev) => ({ ...prev, sections: removeSectionAt(prev.sections, index) }));
+  }, []);
+
+  // Load + autosave the edits overlay alongside stems.
+  useEffect(() => {
+    let cancelled = false;
+    editsDirtyRef.current = false;
+    void (async () => {
+      try {
+        const raw = await invoke<unknown>("read_edits", { songId });
+        if (cancelled) return;
+        setEdits(normalizeEditsFile(raw));
+      } catch {
+        if (!cancelled) setEdits(EMPTY_EDITS);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [songId]);
+
+  useEffect(() => {
+    if (!editsDirtyRef.current) return;
+    const timer = setTimeout(() => {
+      void invoke("write_edits", { songId, edits });
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [edits, songId]);
 
   // Load stems whenever songId changes.
   useEffect(() => {
@@ -268,6 +346,15 @@ export function Player({ songId }: PlayerProps) {
               >
                 Clear A-B
               </Button>
+              <Button
+                size="xs"
+                variant="outline"
+                onClick={() => setSectionDialogOpen(true)}
+                disabled={loop === null}
+                aria-label="name section between A and B"
+              >
+                Name section
+              </Button>
             </HStack>
             <styled.span fontSize="xs" opacity="0.7" fontVariantNumeric="tabular-nums">
               {loop
@@ -327,9 +414,25 @@ export function Player({ songId }: PlayerProps) {
 
       <GridItem minWidth="0">
         {engineRef.current && (
-          <Tab songId={songId} engine={engineRef.current} durationSec={duration} />
+          <Tab
+            songId={songId}
+            engine={engineRef.current}
+            durationSec={duration}
+            edits={edits}
+            onEdit={onEdit}
+            onRemoveSectionAt={onRemoveSectionAt}
+          />
         )}
       </GridItem>
+
+      <SectionDialog
+        open={sectionDialogOpen}
+        onOpenChange={setSectionDialogOpen}
+        onSave={(name, repeats) => {
+          onAddSection(name, repeats);
+          setSectionDialogOpen(false);
+        }}
+      />
     </Grid>
   );
 }
@@ -385,4 +488,91 @@ function fmtTime(seconds: number): string {
   const m = Math.floor(seconds / 60);
   const s = Math.floor(seconds % 60);
   return `${m}:${s.toString().padStart(2, "0")}`;
+}
+
+interface SectionDialogProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onSave: (name: string, repeats?: number) => void;
+}
+
+function SectionDialog({ open, onOpenChange, onSave }: SectionDialogProps) {
+  const [name, setName] = useState("");
+  const [repeatsStr, setRepeatsStr] = useState("1");
+
+  // Reset on open so previous values don't leak across sessions.
+  useEffect(() => {
+    if (open) {
+      setName("");
+      setRepeatsStr("1");
+    }
+  }, [open]);
+
+  const submit = () => {
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    const r = Number.parseInt(repeatsStr, 10);
+    onSave(trimmed, Number.isFinite(r) && r > 0 ? r : undefined);
+  };
+
+  return (
+    <Dialog.Root open={open} onOpenChange={(d) => onOpenChange(d.open)} lazyMount unmountOnExit>
+      <Dialog.Backdrop />
+      <Dialog.Positioner>
+        <Dialog.Content>
+          <Dialog.Title>Name section</Dialog.Title>
+          <Dialog.Description>
+            Region between A and B will be labelled and (optionally) marked with a repeat count.
+          </Dialog.Description>
+          <VStack gap="3" alignItems="stretch" mt="3">
+            <styled.label fontSize="sm" display="flex" flexDirection="column" gap="1">
+              Name
+              <styled.input
+                value={name}
+                onChange={(e) => setName(e.currentTarget.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") submit();
+                }}
+                placeholder="Verse"
+                // oxlint-disable-next-line jsx-a11y/no-autofocus
+                autoFocus
+                px="2"
+                py="1"
+                borderWidth="1px"
+                borderColor="border"
+                borderRadius="l1"
+                bg="canvas"
+                fontSize="sm"
+              />
+            </styled.label>
+            <styled.label fontSize="sm" display="flex" flexDirection="column" gap="1">
+              Repeats
+              <styled.input
+                type="number"
+                min="1"
+                value={repeatsStr}
+                onChange={(e) => setRepeatsStr(e.currentTarget.value)}
+                px="2"
+                py="1"
+                borderWidth="1px"
+                borderColor="border"
+                borderRadius="l1"
+                bg="canvas"
+                fontSize="sm"
+                width="80px"
+              />
+            </styled.label>
+            <HStack gap="2" justifyContent="flex-end">
+              <Button size="sm" variant="outline" onClick={() => onOpenChange(false)}>
+                Cancel
+              </Button>
+              <Button size="sm" onClick={submit} disabled={!name.trim()}>
+                Save
+              </Button>
+            </HStack>
+          </VStack>
+        </Dialog.Content>
+      </Dialog.Positioner>
+    </Dialog.Root>
+  );
 }

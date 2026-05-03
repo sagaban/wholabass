@@ -17,19 +17,22 @@ import {
 import { DEFAULT_TUNING, enumeratePlacements, fingerNotes, type TabNote } from "@/tab/optimizer";
 import { beamGroups, classifyNote, rhythmGlyph } from "@/tab/rhythm";
 import {
-  EMPTY_EDITS,
   applyEdits,
   tabNoteId,
-  upsertEdit,
   type EditOp,
   type EditsFile,
   type NoteId,
+  type SectionLabel,
 } from "@/tab/edits";
+import { beatIndexAt, localBeatDuration } from "@/tab/rhythm";
 
 interface TabProps {
   songId: string;
   engine: StemEngine;
   durationSec: number;
+  edits: EditsFile;
+  onEdit: (op: EditOp) => void;
+  onRemoveSectionAt: (index: number) => void;
 }
 
 interface BeatsPayload {
@@ -39,32 +42,23 @@ interface BeatsPayload {
 
 type LoadStatus = "loading" | "ready" | { kind: "error"; message: string };
 
-const AUTOSAVE_DELAY_MS = 500;
-
-export function Tab({ songId, engine, durationSec }: TabProps) {
+export function Tab({ songId, engine, durationSec, edits, onEdit, onRemoveSectionAt }: TabProps) {
   const [optimizerNotes, setOptimizerNotes] = useState<TabNote[]>([]);
   const [beats, setBeats] = useState<BeatsPayload | null>(null);
-  const [edits, setEdits] = useState<EditsFile>(EMPTY_EDITS);
   const [status, setStatus] = useState<LoadStatus>("loading");
-  // Skip the autosave when edits are first hydrated from disk — only
-  // user mutations should trigger a write.
-  const dirtyRef = useRef(false);
 
   useEffect(() => {
     let cancelled = false;
     setStatus("loading");
-    dirtyRef.current = false;
     void (async () => {
       try {
-        const [notes, b, e] = await Promise.all([
+        const [notes, b] = await Promise.all([
           loadBassNotes(songId),
           invoke<BeatsPayload>("read_beats", { songId }),
-          invoke<EditsFile>("read_edits", { songId }),
         ]);
         if (cancelled) return;
         setOptimizerNotes(fingerNotes(notes as readonly BassNote[]));
         setBeats(b);
-        setEdits(normalizeEdits(e));
         setStatus("ready");
       } catch (err: unknown) {
         if (!cancelled) setStatus({ kind: "error", message: String(err) });
@@ -75,23 +69,7 @@ export function Tab({ songId, engine, durationSec }: TabProps) {
     };
   }, [songId]);
 
-  // Debounced autosave: every mutation schedules a write, replacing any
-  // pending one. On unmount or song-change we flush immediately so a
-  // quick edit + close doesn't lose the change.
-  useEffect(() => {
-    if (!dirtyRef.current) return;
-    const timer = setTimeout(() => {
-      void invoke("write_edits", { songId, edits });
-    }, AUTOSAVE_DELAY_MS);
-    return () => clearTimeout(timer);
-  }, [edits, songId]);
-
   const displayNotes = useMemo(() => applyEdits(optimizerNotes, edits), [optimizerNotes, edits]);
-
-  const handleEdit = useCallback((op: EditOp) => {
-    dirtyRef.current = true;
-    setEdits((prev) => ({ ...prev, notes: upsertEdit(prev.notes, op) }));
-  }, []);
 
   if (status === "loading") {
     return (
@@ -114,19 +92,11 @@ export function Tab({ songId, engine, durationSec }: TabProps) {
       beats={beats!}
       engine={engine}
       durationSec={durationSec}
-      onEdit={handleEdit}
+      sections={edits.sections}
+      onEdit={onEdit}
+      onRemoveSectionAt={onRemoveSectionAt}
     />
   );
-}
-
-function normalizeEdits(raw: unknown): EditsFile {
-  if (!raw || typeof raw !== "object") return EMPTY_EDITS;
-  const r = raw as Partial<EditsFile>;
-  return {
-    version: typeof r.version === "number" ? r.version : EMPTY_EDITS.version,
-    notes: Array.isArray(r.notes) ? (r.notes as EditOp[]) : [],
-    sections: Array.isArray(r.sections) ? r.sections : [],
-  };
 }
 
 interface TabSurfaceProps {
@@ -134,17 +104,65 @@ interface TabSurfaceProps {
   beats: BeatsPayload;
   engine: StemEngine;
   durationSec: number;
+  sections: readonly SectionLabel[];
   onEdit: (op: EditOp) => void;
+  onRemoveSectionAt: (index: number) => void;
+}
+
+interface AddNoteTarget {
+  startSec: number;
+  string: number;
+  /** SVG-coord anchor for the popover. */
+  x: number;
+  y: number;
 }
 
 const STRING_LABELS = ["E", "A", "D", "G"] as const;
 const STEM_LENGTH_PX = 14;
 const FLAG_LENGTH_PX = 5;
 const FLAG_GAP_PX = 3;
+const SECTION_BAND_HEIGHT_PX = 16;
+const ADD_NOTE_FRETS = Array.from({ length: 13 }, (_, i) => i);
 
-function TabSurface({ tabNotes, beats, engine, durationSec, onEdit }: TabSurfaceProps) {
+/** Closest tab string index for a y in SVG coordinates. */
+function closestString(y: number, layout: typeof DEFAULT_LAYOUT): number {
+  let best = 0;
+  let bestDist = Infinity;
+  for (let s = 0; s < layout.stringCount; s++) {
+    const dist = Math.abs(stringIndexToY(s, layout) - y);
+    if (dist < bestDist) {
+      bestDist = dist;
+      best = s;
+    }
+  }
+  return best;
+}
+
+/** Snap a song-time to the nearest 16th-note grid point using the beat track. */
+function snapToSixteenth(time: number, beats: readonly number[]): number {
+  if (beats.length < 2) return Math.max(0, time);
+  const i = beatIndexAt(time, beats);
+  const beatStart = beats[i];
+  const dur = localBeatDuration(time, beats);
+  const sixteenth = dur / 4;
+  if (sixteenth <= 0) return Math.max(0, time);
+  const offset = time - beatStart;
+  const snapped = beatStart + Math.round(offset / sixteenth) * sixteenth;
+  return Math.max(0, snapped);
+}
+
+function TabSurface({
+  tabNotes,
+  beats,
+  engine,
+  durationSec,
+  sections,
+  onEdit,
+  onRemoveSectionAt,
+}: TabSurfaceProps) {
   const layout = DEFAULT_LAYOUT;
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const svgRef = useRef<SVGSVGElement | null>(null);
   const playheadRef = useRef<SVGLineElement | null>(null);
 
   const width = totalWidth(durationSec, layout);
@@ -161,6 +179,38 @@ function TabSurface({ tabNotes, beats, engine, durationSec, onEdit }: TabSurface
     [selectedId, tabNotes],
   );
   const closePopover = useCallback(() => setSelectedId(null), []);
+
+  const [addTarget, setAddTarget] = useState<AddNoteTarget | null>(null);
+  const closeAdd = useCallback(() => setAddTarget(null), []);
+  const [selectedSectionIdx, setSelectedSectionIdx] = useState<number | null>(null);
+  const closeSection = useCallback(() => setSelectedSectionIdx(null), []);
+
+  const handleStaffClick = useCallback(
+    (e: React.MouseEvent<SVGElement>) => {
+      // Only fire when the user clicked the SVG background (or a non-note
+      // child like a string line). Note groups stopPropagation already.
+      if (e.defaultPrevented) return;
+      const svg = svgRef.current;
+      if (!svg) return;
+      const pt = svg.createSVGPoint();
+      pt.x = e.clientX;
+      pt.y = e.clientY;
+      const screenCTM = svg.getScreenCTM();
+      if (!screenCTM) return;
+      const local = pt.matrixTransform(screenCTM.inverse());
+      // Reject clicks above the staff (where bar numbers + sections live).
+      if (local.y < layout.topPadding - 6) return;
+      const stringIdx = closestString(local.y, layout);
+      const startSec = snapToSixteenth(local.x / layout.pixelsPerSecond, beats.beats);
+      setAddTarget({
+        startSec,
+        string: stringIdx,
+        x: timeToX(startSec, layout),
+        y: stringIndexToY(stringIdx, layout),
+      });
+    },
+    [beats.beats, layout],
+  );
 
   // rAF loop: move the playhead and keep it visible.
   // While playing → hold the playhead at ~25% from the viewport's left edge.
@@ -211,11 +261,58 @@ function TabSurface({ tabNotes, beats, engine, durationSec, onEdit }: TabSurface
         bg="canvas"
         height={`${height + 4}px`}
       >
+        {/* oxlint-disable-next-line jsx-a11y/click-events-have-key-events */}
         <svg
+          ref={svgRef}
           width={width}
           height={height}
+          role="application"
+          aria-label="bass tab editor"
+          onClick={handleStaffClick}
           className={css({ display: "block", fontFamily: "inherit" })}
         >
+          {/* Section bands above the staff */}
+          {sections.map((section, idx) => {
+            const x1 = timeToX(section.startSec, layout);
+            const x2 = timeToX(section.endSec, layout);
+            const isSelected = selectedSectionIdx === idx;
+            const labelText =
+              section.repeats && section.repeats > 1
+                ? `${section.name} ×${section.repeats}`
+                : section.name;
+            return (
+              <g
+                key={`section-${section.startSec.toFixed(3)}-${section.endSec.toFixed(3)}-${section.name}`}
+                onClick={(ev) => {
+                  ev.stopPropagation();
+                  ev.preventDefault();
+                  setSelectedSectionIdx(idx);
+                }}
+                className={css({ cursor: "pointer" })}
+              >
+                <rect
+                  x={x1}
+                  y={2}
+                  width={Math.max(2, x2 - x1)}
+                  height={SECTION_BAND_HEIGHT_PX}
+                  rx={2}
+                  fill={isSelected ? "var(--colors-indigo-4)" : "var(--colors-indigo-3)"}
+                  stroke="var(--colors-indigo-7)"
+                  strokeWidth={1}
+                />
+                <text
+                  x={x1 + 5}
+                  y={SECTION_BAND_HEIGHT_PX - 3}
+                  fontSize="11"
+                  fontWeight="600"
+                  fill="var(--colors-indigo-11)"
+                >
+                  {labelText}
+                </text>
+              </g>
+            );
+          })}
+
           {/* String lines */}
           {STRING_LABELS.map((label, i) => {
             const y = stringIndexToY(i, layout);
@@ -387,8 +484,154 @@ function TabSurface({ tabNotes, beats, engine, durationSec, onEdit }: TabSurface
             onClose={closePopover}
           />
         )}
+
+        {addTarget && (
+          <AddNotePopover
+            target={addTarget}
+            durationSec={localBeatDuration(addTarget.startSec, beats.beats)}
+            onAdd={(string, fret) => {
+              const pitch = DEFAULT_TUNING[string] + fret;
+              const id = tabNoteId({ startSec: addTarget.startSec, pitch });
+              onEdit({
+                kind: "add",
+                id,
+                pitch,
+                startSec: addTarget.startSec,
+                durSec: localBeatDuration(addTarget.startSec, beats.beats),
+                velocity: 1,
+                string,
+                fret,
+              });
+              closeAdd();
+            }}
+            onClose={closeAdd}
+          />
+        )}
+
+        {selectedSectionIdx !== null && sections[selectedSectionIdx] && (
+          <SectionDeletePopover
+            section={sections[selectedSectionIdx]}
+            anchorX={timeToX(sections[selectedSectionIdx].startSec, layout)}
+            anchorY={2}
+            onDelete={() => {
+              onRemoveSectionAt(selectedSectionIdx);
+              closeSection();
+            }}
+            onClose={closeSection}
+          />
+        )}
       </Box>
     </Box>
+  );
+}
+
+interface AddNotePopoverProps {
+  target: AddNoteTarget;
+  durationSec: number;
+  onAdd: (string: number, fret: number) => void;
+  onClose: () => void;
+}
+
+function AddNotePopover({ target, onAdd, onClose }: AddNotePopoverProps) {
+  return (
+    <Popover.Root
+      open
+      onOpenChange={(d) => {
+        if (!d.open) onClose();
+      }}
+      positioning={{ placement: "top" }}
+    >
+      <Popover.Anchor asChild>
+        <styled.div
+          position="absolute"
+          width="14px"
+          height="16px"
+          pointerEvents="none"
+          style={{ left: `${target.x - 7}px`, top: `${target.y - 8}px` }}
+        />
+      </Popover.Anchor>
+      <Portal>
+        <Popover.Positioner>
+          <Popover.Content>
+            <Popover.Title>
+              <styled.span fontSize="xs" opacity="0.7">
+                add on {STRING_LABELS[target.string]} @ {target.startSec.toFixed(2)}s
+              </styled.span>
+            </Popover.Title>
+            <Popover.Body>
+              <styled.div fontSize="xs" opacity="0.7" mb="1">
+                fret
+              </styled.div>
+              <HStack gap="1" flexWrap="wrap">
+                {ADD_NOTE_FRETS.map((fret) => (
+                  <Button
+                    key={`fret-${fret}`}
+                    size="xs"
+                    variant="outline"
+                    onClick={() => onAdd(target.string, fret)}
+                  >
+                    {fret}
+                  </Button>
+                ))}
+              </HStack>
+            </Popover.Body>
+          </Popover.Content>
+        </Popover.Positioner>
+      </Portal>
+    </Popover.Root>
+  );
+}
+
+interface SectionDeletePopoverProps {
+  section: SectionLabel;
+  anchorX: number;
+  anchorY: number;
+  onDelete: () => void;
+  onClose: () => void;
+}
+
+function SectionDeletePopover({
+  section,
+  anchorX,
+  anchorY,
+  onDelete,
+  onClose,
+}: SectionDeletePopoverProps) {
+  return (
+    <Popover.Root
+      open
+      onOpenChange={(d) => {
+        if (!d.open) onClose();
+      }}
+      positioning={{ placement: "top" }}
+    >
+      <Popover.Anchor asChild>
+        <styled.div
+          position="absolute"
+          width="20px"
+          height="16px"
+          pointerEvents="none"
+          style={{ left: `${anchorX}px`, top: `${anchorY}px` }}
+        />
+      </Popover.Anchor>
+      <Portal>
+        <Popover.Positioner>
+          <Popover.Content>
+            <Popover.Title>
+              <styled.span fontSize="xs" opacity="0.7">
+                {section.name}
+                {section.repeats && section.repeats > 1 ? ` ×${section.repeats}` : ""}
+              </styled.span>
+            </Popover.Title>
+            <Popover.Body>
+              <Button size="xs" variant="outline" colorPalette="red" onClick={onDelete}>
+                Delete section
+              </Button>
+            </Popover.Body>
+          </Popover.Content>
+        </Popover.Positioner>
+      </Portal>
+    </Popover.Root>
   );
 }
 
@@ -400,20 +643,24 @@ interface NoteEditPopoverProps {
   onClose: () => void;
 }
 
+function bestOctavePlacement(pitch: number) {
+  // Lowest-fret placement is most ergonomic; preferred over the first-in-
+  // array (E→A→D→G) result which biases toward low strings + high frets.
+  const ps = enumeratePlacements(pitch, DEFAULT_TUNING);
+  if (ps.length === 0) return null;
+  let best = ps[0];
+  for (const p of ps) {
+    if (p.fret < best.fret) best = p;
+  }
+  return best;
+}
+
 function NoteEditPopover({ note, anchorX, anchorY, onEdit, onClose }: NoteEditPopoverProps) {
   const id = tabNoteId(note);
-  const placements = useMemo(
-    () => enumeratePlacements(note.pitch, DEFAULT_TUNING, 12),
-    [note.pitch],
-  );
-  const octaveUp = useMemo(
-    () => enumeratePlacements(note.pitch + 12, DEFAULT_TUNING, 12)[0] ?? null,
-    [note.pitch],
-  );
-  const octaveDown = useMemo(
-    () => enumeratePlacements(note.pitch - 12, DEFAULT_TUNING, 12)[0] ?? null,
-    [note.pitch],
-  );
+  const placements = useMemo(() => enumeratePlacements(note.pitch, DEFAULT_TUNING), [note.pitch]);
+  const octaveUp = useMemo(() => bestOctavePlacement(note.pitch + 12), [note.pitch]);
+  const octaveDown = useMemo(() => bestOctavePlacement(note.pitch - 12), [note.pitch]);
+  const noAlternates = placements.length === 0;
 
   return (
     <Popover.Root
@@ -445,10 +692,10 @@ function NoteEditPopover({ note, anchorX, anchorY, onEdit, onClose }: NoteEditPo
               <styled.div fontSize="xs" opacity="0.7" mb="1">
                 alternates
               </styled.div>
-              <HStack gap="1" flexWrap="wrap" mb="3">
-                {placements.length === 0 ? (
+              <HStack gap="1" flexWrap="wrap" mb={noAlternates ? "1" : "3"}>
+                {noAlternates ? (
                   <styled.span fontSize="xs" opacity="0.5">
-                    none in range
+                    pitch is off the neck — try Oct {note.pitch > 60 ? "−" : "+"}
                   </styled.span>
                 ) : (
                   placements.map((p) => {

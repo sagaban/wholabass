@@ -79,11 +79,12 @@ describe("fingerNotes", () => {
   });
 
   test("unreachable pitch falls back to the closest in-range placement", () => {
-    // C5 = 72 with maxFret=12 is unreachable (G string fret would be 29).
-    // Optimizer falls back to G,12 (closest to ideal 29 within [0..12]).
+    // C5 = 72 with default maxFret=24 is unreachable (G string fret would
+    // be 29). Optimizer falls back to G,24 (closest to ideal 29 within
+    // [0..24]).
     const out = fingerNotes([note(72)]);
     expect(out[0].string).toBe(G_STRING);
-    expect(out[0].fret).toBe(12);
+    expect(out[0].fret).toBe(24);
   });
 
   test("default tuning is E1 A1 D2 G2", () => {

@@ -1,12 +1,15 @@
 import { describe, expect, test } from "vitest";
 import {
   EMPTY_EDITS,
+  addSection,
   applyEdits,
   noteId,
+  removeSectionAt,
   tabNoteId,
   upsertEdit,
   type EditOp,
   type EditsFile,
+  type SectionLabel,
 } from "./edits";
 import type { TabNote } from "./optimizer";
 
@@ -132,5 +135,50 @@ describe("upsertEdit", () => {
     const a: EditOp = { kind: "replace", id: "0-40", string: 0, fret: 5 };
     const b: EditOp = { kind: "delete", id: "0.5-45" };
     expect(upsertEdit([a], b)).toEqual([a, b]);
+  });
+
+  test("replace on an added note updates the add op's placement (not a separate replace)", () => {
+    // Without this, the replace would target an optimizer note that doesn't
+    // exist for an added id, and applyEdits would silently drop both ops →
+    // the user-added note would vanish on the first re-pick of its alternate.
+    const add: EditOp = {
+      kind: "add",
+      id: "1-42",
+      pitch: 42,
+      startSec: 1,
+      durSec: 0.25,
+      string: 0,
+      fret: 7,
+    };
+    const replace: EditOp = { kind: "replace", id: "1-42", string: 1, fret: 2 };
+    const out = upsertEdit([add], replace);
+    expect(out).toHaveLength(1);
+    expect(out[0]).toMatchObject({ kind: "add", string: 1, fret: 2, pitch: 42 });
+  });
+});
+
+describe("addSection / removeSectionAt", () => {
+  const a: SectionLabel = { startSec: 8, endSec: 16, name: "Verse", repeats: 1 };
+  const b: SectionLabel = { startSec: 0, endSec: 8, name: "Intro" };
+  const c: SectionLabel = { startSec: 16, endSec: 24, name: "Chorus", repeats: 2 };
+
+  test("addSection inserts and sorts by startSec", () => {
+    const out = addSection([a], b);
+    expect(out.map((s) => s.name)).toEqual(["Intro", "Verse"]);
+  });
+
+  test("addSection chains preserve sort order", () => {
+    const out = addSection(addSection([a], b), c);
+    expect(out.map((s) => s.name)).toEqual(["Intro", "Verse", "Chorus"]);
+  });
+
+  test("removeSectionAt removes by index", () => {
+    const out = removeSectionAt([b, a, c], 1);
+    expect(out.map((s) => s.name)).toEqual(["Intro", "Chorus"]);
+  });
+
+  test("removeSectionAt is a no-op for out-of-range indices", () => {
+    expect(removeSectionAt([a], -1)).toEqual([a]);
+    expect(removeSectionAt([a], 99)).toEqual([a]);
   });
 });

@@ -33,10 +33,25 @@ export type EditOp =
     };
 
 export interface SectionLabel {
-  startBeat: number;
-  endBeat: number;
+  startSec: number;
+  endSec: number;
   name: string;
   repeats?: number;
+}
+
+export function addSection(sections: readonly SectionLabel[], label: SectionLabel): SectionLabel[] {
+  // Sort by startSec so the renderer can iterate in time order without
+  // re-sorting on every paint.
+  const out = [...sections, label];
+  out.sort((a, b) => a.startSec - b.startSec);
+  return out;
+}
+
+export function removeSectionAt(sections: readonly SectionLabel[], index: number): SectionLabel[] {
+  if (index < 0 || index >= sections.length) return sections.slice();
+  const out = sections.slice();
+  out.splice(index, 1);
+  return out;
 }
 
 export interface EditsFile {
@@ -102,17 +117,23 @@ export function applyEdits(notes: readonly TabNote[], edits: EditsFile): TabNote
 /**
  * Replace the in-memory edits list so a `replace` for the same note id
  * supersedes any older op (we never want two replaces for the same note).
- * `delete` of a previously-`add`ed note removes the add instead. Returns
- * a new array — caller substitutes it into the EditsFile.
+ *
+ * Special cases when the existing op is an `add`:
+ *  - `delete` cancels both — the note never made it into the optimizer
+ *    output, so removing it is a no-op.
+ *  - `replace` updates the add's string/fret in place, because a bare
+ *    `replace` targets optimizer notes and would silently drop on apply.
  */
 export function upsertEdit(ops: readonly EditOp[], next: EditOp): EditOp[] {
-  const out = ops.filter((op) => op.id !== next.id);
-  // A `delete` on something we just `add`ed cancels both — the note
-  // never existed in the optimizer output, so removing it is a no-op.
+  const existing = ops.find((op) => op.id === next.id);
+  const filtered = ops.filter((op) => op.id !== next.id);
+
   if (next.kind === "delete") {
-    const wasAdded = ops.some((op) => op.id === next.id && op.kind === "add");
-    if (wasAdded) return out;
+    if (existing?.kind === "add") return filtered;
+    return [...filtered, next];
   }
-  out.push(next);
-  return out;
+  if (next.kind === "replace" && existing?.kind === "add") {
+    return [...filtered, { ...existing, string: next.string, fret: next.fret }];
+  }
+  return [...filtered, next];
 }
