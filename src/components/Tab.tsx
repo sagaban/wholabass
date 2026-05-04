@@ -258,6 +258,18 @@ function TabSurface({
   }, [systems, tabNotes, groups, sections]);
 
   const [selectedId, setSelectedId] = useState<NoteId | null>(null);
+  const [selection, setSelection] = useState<Set<NoteId>>(() => new Set());
+  const lastClickedRef = useRef<NoteId | null>(null);
+  const clipboardRef = useRef<
+    {
+      pitch: number;
+      relStartSec: number;
+      durSec: number;
+      velocity: number;
+      string: number;
+      fret: number;
+    }[]
+  >([]);
   const selectedNote = useMemo(
     () => (selectedId ? (tabNotes.find((n) => tabNoteId(n) === selectedId) ?? null) : null),
     [selectedId, tabNotes],
@@ -269,6 +281,23 @@ function TabSurface({
     );
   }, [selectedNote, systems]);
   const closePopover = useCallback(() => setSelectedId(null), []);
+
+  // Range-select all notes whose startSec lies between `a`'s and `b`'s.
+  const rangeSelect = useCallback(
+    (a: NoteId, b: NoteId) => {
+      const aNote = tabNotes.find((n) => tabNoteId(n) === a);
+      const bNote = tabNotes.find((n) => tabNoteId(n) === b);
+      if (!aNote || !bNote) return;
+      const lo = Math.min(aNote.startSec, bNote.startSec);
+      const hi = Math.max(aNote.startSec, bNote.startSec);
+      const next = new Set<NoteId>();
+      for (const n of tabNotes) {
+        if (n.startSec >= lo && n.startSec <= hi) next.add(tabNoteId(n));
+      }
+      setSelection(next);
+    },
+    [tabNotes],
+  );
 
   const [addTarget, setAddTarget] = useState<(AddNoteTarget & { systemIdx: number }) | null>(null);
   const closeAdd = useCallback(() => setAddTarget(null), []);
@@ -286,6 +315,217 @@ function TabSurface({
       return systems.length - 1;
     },
     [systems],
+  );
+
+  /**
+   * Duplicate every note inside `barIdx` into the bar that follows,
+   * shifting later notes by one bar duration so the song structure
+   * matches an audio repeat that the imported MIDI didn't include.
+   * Bar duration is taken from the local beat track; the trailing
+   * region after the final bar uses song duration as its right edge.
+   */
+  const duplicateBar = useCallback(
+    (barIdx: number) => {
+      if (barIdx < 0 || barIdx >= bars.length) return;
+      const barStart = bars[barIdx];
+      const barEnd = barIdx + 1 < bars.length ? bars[barIdx + 1] : durationSec;
+      const barDur = barEnd - barStart;
+      if (barDur <= 0) return;
+
+      const inBar = tabNotes.filter((n) => n.startSec >= barStart && n.startSec < barEnd);
+      const after = tabNotes.filter((n) => n.startSec >= barEnd);
+
+      // Shift later notes by one bar so the inserted copy fits.
+      for (const n of after) {
+        onEdit({ kind: "delete", id: tabNoteId(n) });
+        onEdit({
+          kind: "add",
+          id: tabNoteId({ startSec: n.startSec + barDur, pitch: n.pitch }),
+          pitch: n.pitch,
+          startSec: n.startSec + barDur,
+          durSec: n.durSec,
+          velocity: n.velocity,
+          string: n.string,
+          fret: n.fret,
+        });
+      }
+      // Duplicate in-bar notes one bar later.
+      for (const n of inBar) {
+        const newStart = n.startSec + barDur;
+        onEdit({
+          kind: "add",
+          id: tabNoteId({ startSec: newStart, pitch: n.pitch }),
+          pitch: n.pitch,
+          startSec: newStart,
+          durSec: n.durSec,
+          velocity: n.velocity,
+          string: n.string,
+          fret: n.fret,
+        });
+      }
+    },
+    [bars, durationSec, tabNotes, onEdit],
+  );
+
+  const handleStaffContextMenu = useCallback(
+    (e: React.MouseEvent<SVGElement>, systemIdx: number) => {
+      e.preventDefault();
+      const sys = systems[systemIdx];
+      if (!sys) return;
+      const svg = e.currentTarget as SVGSVGElement;
+      const pt = svg.createSVGPoint();
+      pt.x = e.clientX;
+      pt.y = e.clientY;
+      const ctm = svg.getScreenCTM();
+      if (!ctm) return;
+      const local = pt.matrixTransform(ctm.inverse());
+      const t = rowXToTime(sys, local.x);
+      // Find the bar index covering `t`. The trailing region after the
+      // last bar still counts as that final bar.
+      let barIdx = -1;
+      for (let i = 0; i < bars.length; i++) {
+        const next = i + 1 < bars.length ? bars[i + 1] : durationSec;
+        if (t >= bars[i] && t < next) {
+          barIdx = i;
+          break;
+        }
+      }
+      if (barIdx < 0) return;
+      duplicateBar(barIdx);
+    },
+    [systems, bars, durationSec, duplicateBar],
+  );
+
+  // Map screen coordinates → drop target on the staff. Used by drag.
+  const findDropTarget = useCallback(
+    (clientX: number, clientY: number): { startSec: number; string: number } | null => {
+      for (const [idx, el] of systemElsRef.current) {
+        const rect = el.getBoundingClientRect();
+        if (clientY < rect.top || clientY > rect.bottom) continue;
+        const sys = systems[idx];
+        if (!sys) continue;
+        const localX = Math.max(0, Math.min(sys.widthPx, clientX - rect.left));
+        const localY = clientY - rect.top;
+        const t = rowXToTime(sys, localX);
+        const startSec = Math.max(0, Math.min(durationSec, snapToSixteenth(t, beats.beats)));
+        const string = closestString(localY, layout);
+        return { startSec, string };
+      }
+      return null;
+    },
+    [systems, durationSec, beats.beats, layout],
+  );
+
+  // Drag state lives in a ref because we update it from window-level
+  // mouse listeners — we only need React to know about it on commit so
+  // it can dispatch the resulting edit ops.
+  const dragRef = useRef<{
+    id: NoteId;
+    pitch: number;
+    durSec: number;
+    velocity: number;
+    startSec: number;
+    string: number;
+    startX: number;
+    startY: number;
+    moved: boolean;
+  } | null>(null);
+
+  const beginDrag = useCallback(
+    (e: React.MouseEvent<SVGElement>, note: TabNote) => {
+      // Only respond to left-click; right-click handled separately.
+      if (e.button !== 0) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const id = tabNoteId(note);
+      const meta = e.metaKey || e.ctrlKey;
+      const shift = e.shiftKey;
+      dragRef.current = {
+        id,
+        pitch: note.pitch,
+        durSec: note.durSec,
+        velocity: note.velocity,
+        startSec: note.startSec,
+        string: note.string,
+        startX: e.clientX,
+        startY: e.clientY,
+        moved: false,
+      };
+
+      const onMove = (ev: MouseEvent) => {
+        const drag = dragRef.current;
+        if (!drag) return;
+        const dx = ev.clientX - drag.startX;
+        const dy = ev.clientY - drag.startY;
+        if (dx * dx + dy * dy > 9) drag.moved = true;
+      };
+      const onUp = (ev: MouseEvent) => {
+        window.removeEventListener("mousemove", onMove);
+        window.removeEventListener("mouseup", onUp);
+        const drag = dragRef.current;
+        dragRef.current = null;
+        if (!drag) return;
+
+        // No movement: act on selection. Modifiers gate which mode.
+        if (!drag.moved) {
+          if (meta) {
+            // Toggle this note in the multi-select set.
+            setSelection((prev) => {
+              const next = new Set(prev);
+              if (next.has(drag.id)) next.delete(drag.id);
+              else next.add(drag.id);
+              return next;
+            });
+            lastClickedRef.current = drag.id;
+            setSelectedId(null);
+          } else if (shift && lastClickedRef.current) {
+            rangeSelect(lastClickedRef.current, drag.id);
+            setSelectedId(null);
+          } else {
+            // Plain click → single-select + open popover.
+            setSelection(new Set([drag.id]));
+            lastClickedRef.current = drag.id;
+            setSelectedId(drag.id);
+          }
+          return;
+        }
+
+        const target = findDropTarget(ev.clientX, ev.clientY);
+        if (!target) return;
+        const sameTime = Math.abs(target.startSec - drag.startSec) < 1e-6;
+        const sameString = target.string === drag.string;
+        if (sameTime && sameString) return;
+
+        const newFret = drag.pitch - DEFAULT_TUNING[target.string];
+        // Drop only lands if the same pitch is reachable on the new
+        // string within a 24-fret neck. Otherwise the drag silently
+        // cancels — better than producing a fret-26 ghost.
+        if (newFret < 0 || newFret > 24) return;
+
+        if (!sameTime) {
+          onEdit({ kind: "delete", id: drag.id });
+          onEdit({
+            kind: "add",
+            id: tabNoteId({ startSec: target.startSec, pitch: drag.pitch }),
+            pitch: drag.pitch,
+            startSec: target.startSec,
+            durSec: drag.durSec,
+            velocity: drag.velocity,
+            string: target.string,
+            fret: newFret,
+          });
+        } else {
+          onEdit({ kind: "replace", id: drag.id, string: target.string, fret: newFret });
+        }
+        // Selection becomes stale (id changed) — reset to the new note.
+        setSelection(new Set());
+        lastClickedRef.current = null;
+        setSelectedId(null);
+      };
+      window.addEventListener("mousemove", onMove);
+      window.addEventListener("mouseup", onUp);
+    },
+    [findDropTarget, onEdit, rangeSelect],
   );
 
   const handleStaffClick = useCallback(
@@ -318,6 +558,68 @@ function TabSurface({
     },
     [systems, beats.beats, layout, durationSec, findSystem],
   );
+
+  // Window-level keyboard shortcuts for the multi-select clipboard.
+  // We skip when an input/textarea has focus so typing in a section
+  // dialog or repeats field doesn't trigger Esc / Backspace handling.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (t) {
+        const tag = t.tagName;
+        if (tag === "INPUT" || tag === "TEXTAREA" || t.isContentEditable) return;
+      }
+      const meta = e.metaKey || e.ctrlKey;
+
+      if (e.key === "Escape") {
+        setSelection(new Set());
+        setSelectedId(null);
+        return;
+      }
+      if ((e.key === "Backspace" || e.key === "Delete") && selection.size > 0) {
+        for (const id of selection) onEdit({ kind: "delete", id });
+        setSelection(new Set());
+        setSelectedId(null);
+        e.preventDefault();
+        return;
+      }
+      if (meta && e.key.toLowerCase() === "c" && selection.size > 0) {
+        const picked = tabNotes.filter((n) => selection.has(tabNoteId(n)));
+        if (picked.length === 0) return;
+        const earliest = picked.reduce((m, n) => Math.min(m, n.startSec), Infinity);
+        clipboardRef.current = picked.map((n) => ({
+          pitch: n.pitch,
+          relStartSec: n.startSec - earliest,
+          durSec: n.durSec,
+          velocity: n.velocity,
+          string: n.string,
+          fret: n.fret,
+        }));
+        e.preventDefault();
+        return;
+      }
+      if (meta && e.key.toLowerCase() === "v" && clipboardRef.current.length > 0) {
+        const t0 = engine.getCurrentTime();
+        for (const c of clipboardRef.current) {
+          const start = t0 + c.relStartSec;
+          onEdit({
+            kind: "add",
+            id: tabNoteId({ startSec: start, pitch: c.pitch }),
+            pitch: c.pitch,
+            startSec: start,
+            durSec: c.durSec,
+            velocity: c.velocity,
+            string: c.string,
+            fret: c.fret,
+          });
+        }
+        e.preventDefault();
+        return;
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [selection, tabNotes, onEdit, engine]);
 
   // rAF: place playhead in the active system, scroll that row into view
   // when it changes (or when the user is mid-playback and seeks).
@@ -391,6 +693,7 @@ function TabSurface({
               groups={sliced[idx].sysGroups}
               sections={sliced[idx].sysSections}
               selectedNote={selectedNoteSystemIdx === idx ? selectedNote : null}
+              selection={selection}
               selectedSection={
                 sectionForThisRow && sectionForThisRow.startsHere
                   ? sectionForThisRow.fullSection
@@ -423,9 +726,10 @@ function TabSurface({
                 onRemoveSectionAt(selectedSectionIdx);
                 closeSection();
               }}
-              onPickNote={setSelectedId}
+              onNoteMouseDown={beginDrag}
               onPickSection={setSelectedSectionIdx}
               onClickStaff={(e) => handleStaffClick(e, idx)}
+              onContextStaff={(e) => handleStaffContextMenu(e, idx)}
               registerSystemEl={(el) => {
                 if (el) systemElsRef.current.set(idx, el);
                 else systemElsRef.current.delete(idx);
@@ -459,6 +763,7 @@ interface TabSystemRowProps {
     startsHere: boolean;
   }[];
   selectedNote: TabNote | null;
+  selection: ReadonlySet<NoteId>;
   selectedSection: SectionLabel | null;
   selectedSectionIdx: number | null;
   addTarget: AddNoteTarget | null;
@@ -468,9 +773,10 @@ interface TabSystemRowProps {
   onCloseSection: () => void;
   onAddNote: (string: number, fret: number) => void;
   onDeleteSection: () => void;
-  onPickNote: (id: NoteId) => void;
+  onNoteMouseDown: (e: React.MouseEvent<SVGElement>, note: TabNote) => void;
   onPickSection: (idx: number) => void;
   onClickStaff: (e: React.MouseEvent<SVGElement>) => void;
+  onContextStaff: (e: React.MouseEvent<SVGElement>) => void;
   registerSystemEl: (el: HTMLDivElement | null) => void;
   registerPlayhead: (el: SVGLineElement | null) => void;
 }
@@ -484,6 +790,7 @@ function TabSystemRow({
   groups,
   sections,
   selectedNote,
+  selection,
   selectedSection,
   selectedSectionIdx,
   addTarget,
@@ -493,9 +800,10 @@ function TabSystemRow({
   onCloseSection,
   onAddNote,
   onDeleteSection,
-  onPickNote,
+  onNoteMouseDown,
   onPickSection,
   onClickStaff,
+  onContextStaff,
   registerSystemEl,
   registerPlayhead,
 }: TabSystemRowProps) {
@@ -527,6 +835,7 @@ function TabSystemRow({
         role="application"
         aria-label="bass tab editor row"
         onClick={onClickStaff}
+        onContextMenu={onContextStaff}
         className={css({ display: "block", fontFamily: "inherit" })}
       >
         {/* Section bands clipped to this row */}
@@ -629,15 +938,14 @@ function TabSystemRow({
           const y = stringIndexToY(n.string, layout);
           const glyph = rhythmGlyph(classifyNote(n, beats.beats));
           const id = tabNoteId(n);
-          const isSelected = selectedNote ? id === tabNoteId(selectedNote) : false;
+          const isPopoverTarget = selectedNote ? id === tabNoteId(selectedNote) : false;
+          const isInSelection = selection.has(id);
+          const isSelected = isPopoverTarget || isInSelection;
           return (
             <g
               key={id}
-              onClick={(ev) => {
-                ev.stopPropagation();
-                onPickNote(id);
-              }}
-              className={css({ cursor: "pointer" })}
+              onMouseDown={(ev) => onNoteMouseDown(ev, n)}
+              className={css({ cursor: "grab" })}
             >
               <rect
                 x={x - 7}
