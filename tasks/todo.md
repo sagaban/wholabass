@@ -20,8 +20,8 @@ See [plan.md](plan.md) for full task descriptions, acceptance criteria, and veri
 
 - [x] T9 — Library list UI (basic list + delete; sidebar/sort polish later)
 - [x] T10 — Progress + cancellation (real yt-dlp %, monotonic stage bar, cancel respawns sidecar + cleans partial)
-- [ ] T11 — First-run model setup
-- [ ] T12 — Smoke test + lint/format CI
+- [x] T11 — First-run model setup
+- [ ] T12 — Smoke test + lint/format CI _(deferred — personal practice app, no distribution)_
 
 # Phase 2 — Tab + MIDI playback
 
@@ -29,15 +29,15 @@ See [plan.md](plan.md#phase-2-implementation-plan) for full task descriptions.
 
 ## Critical path
 
-- [ ] T13 — Beat / tempo sidecar (`librosa.beat.beat_track`) + `beats.json` cache
-- [ ] T14 — Fingering optimizer (TS, DP over `(string, fret)`)
-- [ ] T15 — Tab SVG renderer
-- [ ] T16 — Split layout (narrow Player ↔ Tab side-by-side)
-- [ ] T17 — MIDI playback via Tone.js soft-synth (Audio / MIDI / Both)
-- [ ] T18 — Rhythm notation polish (beams, ties, tempo header)
+- [x] T13 — Beat / tempo sidecar (`librosa.beat.beat_track`) + `beats.json` cache
+- [x] T14 — Fingering optimizer (TS, DP over `(string, fret)`)
+- [x] T15 — Tab SVG renderer
+- [x] T16 — Split layout (narrow Player ↔ Tab side-by-side)
+- [x] T17 — MIDI playback via Tone.js soft-synth (shipped as a 5th mixer track, not a mode toggle)
+- [x] T18 — Rhythm notation polish (duration classification + beams, ties deferred)
 
 # Phase 3 — Editable tabs
 
-- [ ] T19 — Click-to-edit per-note popover
-- [ ] T20 — Edits persistence + overlay rendering
-- [ ] T21 — Add notes + section labels + repeats
+- [x] T19 — Click-to-edit per-note popover
+- [x] T20 — Edits persistence + overlay rendering
+- [x] T21 — Add notes + section labels + repeats
