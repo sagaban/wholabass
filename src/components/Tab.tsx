@@ -379,6 +379,41 @@ function TabSurface({
     [bars, durationSec, tabNotes, onEdit, transact],
   );
 
+  /** Shift every note at or after `sec` by `delta` seconds. */
+  const shiftNotesAfter = useCallback(
+    (sec: number, delta: number) => {
+      const after = tabNotes.filter((n) => n.startSec >= sec);
+      transact(() => {
+        for (const n of after) {
+          onEdit({ kind: "delete", id: tabNoteId(n) });
+          onEdit({
+            kind: "add",
+            id: tabNoteId({ startSec: n.startSec + delta, pitch: n.pitch }),
+            pitch: n.pitch,
+            startSec: n.startSec + delta,
+            durSec: n.durSec,
+            velocity: n.velocity,
+            string: n.string,
+            fret: n.fret,
+          });
+        }
+      });
+    },
+    [tabNotes, onEdit, transact],
+  );
+
+  // Right-click → context menu state. Captures the click target so menu
+  // items can operate at the right bar / time.
+  const [ctxMenu, setCtxMenu] = useState<{
+    clientX: number;
+    clientY: number;
+    barIdx: number;
+    barStart: number;
+    barDur: number;
+    pasteSec: number;
+  } | null>(null);
+  const closeCtxMenu = useCallback(() => setCtxMenu(null), []);
+
   const handleStaffContextMenu = useCallback(
     (e: React.MouseEvent<SVGElement>, systemIdx: number) => {
       e.preventDefault();
@@ -392,8 +427,6 @@ function TabSurface({
       if (!ctm) return;
       const local = pt.matrixTransform(ctm.inverse());
       const t = rowXToTime(sys, local.x);
-      // Find the bar index covering `t`. The trailing region after the
-      // last bar still counts as that final bar.
       let barIdx = -1;
       for (let i = 0; i < bars.length; i++) {
         const next = i + 1 < bars.length ? bars[i + 1] : durationSec;
@@ -403,9 +436,77 @@ function TabSurface({
         }
       }
       if (barIdx < 0) return;
-      duplicateBar(barIdx);
+      const barStart = bars[barIdx];
+      const barEnd = barIdx + 1 < bars.length ? bars[barIdx + 1] : durationSec;
+      setCtxMenu({
+        clientX: e.clientX,
+        clientY: e.clientY,
+        barIdx,
+        barStart,
+        barDur: barEnd - barStart,
+        pasteSec: snapToSixteenth(t, beats.beats),
+      });
     },
-    [systems, bars, durationSec, duplicateBar],
+    [systems, bars, durationSec, beats.beats],
+  );
+
+  // Menu actions.
+  const ctxCopy = useCallback(() => {
+    if (selection.size === 0) return;
+    const picked = tabNotes.filter((n) => selection.has(tabNoteId(n)));
+    if (picked.length === 0) return;
+    const earliest = picked.reduce((m, n) => Math.min(m, n.startSec), Infinity);
+    clipboardRef.current = picked.map((n) => ({
+      pitch: n.pitch,
+      relStartSec: n.startSec - earliest,
+      durSec: n.durSec,
+      velocity: n.velocity,
+      string: n.string,
+      fret: n.fret,
+    }));
+  }, [selection, tabNotes]);
+
+  const ctxCut = useCallback(() => {
+    if (selection.size === 0) return;
+    ctxCopy();
+    transact(() => {
+      for (const id of selection) onEdit({ kind: "delete", id });
+    });
+    setSelection(new Set());
+    setSelectedId(null);
+  }, [selection, ctxCopy, transact, onEdit]);
+
+  const ctxPasteAt = useCallback(
+    (sec: number) => {
+      if (clipboardRef.current.length === 0) return;
+      transact(() => {
+        for (const c of clipboardRef.current) {
+          const start = sec + c.relStartSec;
+          onEdit({
+            kind: "add",
+            id: tabNoteId({ startSec: start, pitch: c.pitch }),
+            pitch: c.pitch,
+            startSec: start,
+            durSec: c.durSec,
+            velocity: c.velocity,
+            string: c.string,
+            fret: c.fret,
+          });
+        }
+      });
+    },
+    [transact, onEdit],
+  );
+
+  const ctxInsertEmptyBarAfter = useCallback(
+    (barIdx: number) => {
+      if (barIdx < 0 || barIdx >= bars.length) return;
+      const barEnd = barIdx + 1 < bars.length ? bars[barIdx + 1] : durationSec;
+      const barDur = barEnd - bars[barIdx];
+      if (barDur <= 0) return;
+      shiftNotesAfter(barEnd, barDur);
+    },
+    [bars, durationSec, shiftNotesAfter],
   );
 
   // Map screen coordinates → drop target on the staff. Used by drag.
@@ -542,21 +643,13 @@ function TabSurface({
     [findDropTarget, onEdit, rangeSelect, transact],
   );
 
-  const handleStaffClick = useCallback(
-    (e: React.MouseEvent<SVGElement>, systemIdx: number) => {
-      if (e.defaultPrevented) return;
-      const svg = e.currentTarget as SVGSVGElement;
-      const pt = svg.createSVGPoint();
-      pt.x = e.clientX;
-      pt.y = e.clientY;
-      const ctm = svg.getScreenCTM();
-      if (!ctm) return;
-      const local = pt.matrixTransform(ctm.inverse());
-      if (local.y < layout.topPadding - 6) return;
+  const openAddNoteAt = useCallback(
+    (localX: number, localY: number, systemIdx: number) => {
+      if (localY < layout.topPadding - 6) return;
       const sys = systems[systemIdx];
       if (!sys) return;
-      const stringIdx = closestString(local.y, layout);
-      const localTime = rowXToTime(sys, local.x);
+      const stringIdx = closestString(localY, layout);
+      const localTime = rowXToTime(sys, localX);
       const startSec = snapToSixteenth(localTime, beats.beats);
       if (startSec >= durationSec) return;
       const targetSystemIdx = findSystem(startSec);
@@ -571,6 +664,90 @@ function TabSurface({
       });
     },
     [systems, beats.beats, layout, durationSec, findSystem],
+  );
+
+  // Marquee: drag a rect on empty staff to lasso notes inside.
+  const [marquee, setMarquee] = useState<{
+    systemIdx: number;
+    x1: number;
+    y1: number;
+    x2: number;
+    y2: number;
+  } | null>(null);
+
+  const beginStaffMouseDown = useCallback(
+    (e: React.MouseEvent<SVGElement>, systemIdx: number) => {
+      if (e.button !== 0) return;
+      // Click events on note <g>s already stopPropagation, so we only
+      // get here when the user grabs empty staff.
+      const svg = e.currentTarget as SVGSVGElement;
+      const ctm0 = svg.getScreenCTM();
+      if (!ctm0) return;
+      const startPt = svg.createSVGPoint();
+      startPt.x = e.clientX;
+      startPt.y = e.clientY;
+      const start = startPt.matrixTransform(ctm0.inverse());
+      const downX = e.clientX;
+      const downY = e.clientY;
+      let moved = false;
+
+      const onMove = (ev: MouseEvent) => {
+        const dx = ev.clientX - downX;
+        const dy = ev.clientY - downY;
+        if (dx * dx + dy * dy > 9) moved = true;
+        if (!moved) return;
+        const ctm = svg.getScreenCTM();
+        if (!ctm) return;
+        const cur = svg.createSVGPoint();
+        cur.x = ev.clientX;
+        cur.y = ev.clientY;
+        const local = cur.matrixTransform(ctm.inverse());
+        setMarquee({
+          systemIdx,
+          x1: start.x,
+          y1: start.y,
+          x2: local.x,
+          y2: local.y,
+        });
+      };
+      const onUp = (ev: MouseEvent) => {
+        window.removeEventListener("mousemove", onMove);
+        window.removeEventListener("mouseup", onUp);
+        if (!moved) {
+          openAddNoteAt(start.x, start.y, systemIdx);
+          return;
+        }
+        // Finalise: select notes inside the rect.
+        const ctm = svg.getScreenCTM();
+        const endPt = svg.createSVGPoint();
+        endPt.x = ev.clientX;
+        endPt.y = ev.clientY;
+        const end = ctm ? endPt.matrixTransform(ctm.inverse()) : start;
+        const xLo = Math.min(start.x, end.x);
+        const xHi = Math.max(start.x, end.x);
+        const yLo = Math.min(start.y, end.y);
+        const yHi = Math.max(start.y, end.y);
+        const sys = systems[systemIdx];
+        const next = new Set<NoteId>();
+        if (sys) {
+          for (const n of tabNotes) {
+            if (n.startSec < sys.startSec || n.startSec >= sys.endSec) continue;
+            const x = rowTimeToX(sys, n.startSec);
+            const y = stringIndexToY(n.string, layout);
+            if (x >= xLo && x <= xHi && y >= yLo && y <= yHi) {
+              next.add(tabNoteId(n));
+            }
+          }
+        }
+        setSelection(next);
+        setSelectedId(null);
+        lastClickedRef.current = null;
+        setMarquee(null);
+      };
+      window.addEventListener("mousemove", onMove);
+      window.addEventListener("mouseup", onUp);
+    },
+    [openAddNoteAt, systems, tabNotes, layout],
   );
 
   // Window-level keyboard shortcuts for the multi-select clipboard.
@@ -746,8 +923,9 @@ function TabSurface({
               }}
               onNoteMouseDown={beginDrag}
               onPickSection={setSelectedSectionIdx}
-              onClickStaff={(e) => handleStaffClick(e, idx)}
+              onStaffMouseDown={(e) => beginStaffMouseDown(e, idx)}
               onContextStaff={(e) => handleStaffContextMenu(e, idx)}
+              marquee={marquee && marquee.systemIdx === idx ? marquee : null}
               registerSystemEl={(el) => {
                 if (el) systemElsRef.current.set(idx, el);
                 else systemElsRef.current.delete(idx);
@@ -759,6 +937,132 @@ function TabSurface({
             />
           );
         })}
+      </Box>
+
+      {ctxMenu && (
+        <ContextMenu
+          x={ctxMenu.clientX}
+          y={ctxMenu.clientY}
+          canCopy={selection.size > 0}
+          canPaste={clipboardRef.current.length > 0}
+          onCopy={() => {
+            ctxCopy();
+            closeCtxMenu();
+          }}
+          onCut={() => {
+            ctxCut();
+            closeCtxMenu();
+          }}
+          onPaste={() => {
+            ctxPasteAt(ctxMenu.pasteSec);
+            closeCtxMenu();
+          }}
+          onInsertEmptyBar={() => {
+            ctxInsertEmptyBarAfter(ctxMenu.barIdx);
+            closeCtxMenu();
+          }}
+          onDuplicateBar={() => {
+            duplicateBar(ctxMenu.barIdx);
+            closeCtxMenu();
+          }}
+          onClose={closeCtxMenu}
+        />
+      )}
+    </Box>
+  );
+}
+
+interface ContextMenuProps {
+  x: number;
+  y: number;
+  canCopy: boolean;
+  canPaste: boolean;
+  onCopy: () => void;
+  onCut: () => void;
+  onPaste: () => void;
+  onInsertEmptyBar: () => void;
+  onDuplicateBar: () => void;
+  onClose: () => void;
+}
+
+function ContextMenu({
+  x,
+  y,
+  canCopy,
+  canPaste,
+  onCopy,
+  onCut,
+  onPaste,
+  onInsertEmptyBar,
+  onDuplicateBar,
+  onClose,
+}: ContextMenuProps) {
+  // A backdrop catches clicks anywhere outside the menu and closes
+  // it. Esc also closes; we attach the keydown lazily so it doesn't
+  // fight the multi-select shortcuts when no menu is open.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  const items: { label: string; disabled?: boolean; run: () => void }[] = [
+    { label: "Copy", disabled: !canCopy, run: onCopy },
+    { label: "Cut", disabled: !canCopy, run: onCut },
+    { label: "Paste here", disabled: !canPaste, run: onPaste },
+    { label: "Insert empty bar after this", run: onInsertEmptyBar },
+    { label: "Duplicate this bar", run: onDuplicateBar },
+  ];
+
+  return (
+    <Box
+      position="fixed"
+      inset="0"
+      zIndex="100"
+      onClick={onClose}
+      onContextMenu={(e) => {
+        e.preventDefault();
+        onClose();
+      }}
+    >
+      <Box
+        position="absolute"
+        bg="bg.default"
+        borderWidth="1px"
+        borderColor="border"
+        borderRadius="l1"
+        boxShadow="md"
+        py="1"
+        minWidth="180px"
+        style={{ left: `${x}px`, top: `${y}px` }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        {items.map((it) => (
+          <styled.button
+            key={it.label}
+            type="button"
+            onClick={() => {
+              if (it.disabled) return;
+              it.run();
+            }}
+            disabled={it.disabled}
+            display="block"
+            width="100%"
+            textAlign="left"
+            px="3"
+            py="1.5"
+            fontSize="sm"
+            bg="transparent"
+            border="none"
+            cursor={it.disabled ? "not-allowed" : "pointer"}
+            opacity={it.disabled ? "0.4" : "1"}
+            _hover={it.disabled ? undefined : { bg: "bg.muted" }}
+          >
+            {it.label}
+          </styled.button>
+        ))}
       </Box>
     </Box>
   );
@@ -793,8 +1097,9 @@ interface TabSystemRowProps {
   onDeleteSection: () => void;
   onNoteMouseDown: (e: React.MouseEvent<SVGElement>, note: TabNote) => void;
   onPickSection: (idx: number) => void;
-  onClickStaff: (e: React.MouseEvent<SVGElement>) => void;
+  onStaffMouseDown: (e: React.MouseEvent<SVGElement>) => void;
   onContextStaff: (e: React.MouseEvent<SVGElement>) => void;
+  marquee: { x1: number; y1: number; x2: number; y2: number } | null;
   registerSystemEl: (el: HTMLDivElement | null) => void;
   registerPlayhead: (el: SVGLineElement | null) => void;
 }
@@ -820,8 +1125,9 @@ function TabSystemRow({
   onDeleteSection,
   onNoteMouseDown,
   onPickSection,
-  onClickStaff,
+  onStaffMouseDown,
   onContextStaff,
+  marquee,
   registerSystemEl,
   registerPlayhead,
 }: TabSystemRowProps) {
@@ -852,7 +1158,7 @@ function TabSystemRow({
         height={heightPx}
         role="application"
         aria-label="bass tab editor row"
-        onClick={onClickStaff}
+        onMouseDown={onStaffMouseDown}
         onContextMenu={onContextStaff}
         className={css({ display: "block", fontFamily: "inherit" })}
       >
@@ -1038,6 +1344,22 @@ function TabSystemRow({
             </g>
           );
         })}
+
+        {/* Rubber-band selection rectangle. */}
+        {marquee && (
+          <rect
+            x={Math.min(marquee.x1, marquee.x2)}
+            y={Math.min(marquee.y1, marquee.y2)}
+            width={Math.abs(marquee.x2 - marquee.x1)}
+            height={Math.abs(marquee.y2 - marquee.y1)}
+            fill="var(--colors-indigo-3)"
+            fillOpacity="0.3"
+            stroke="var(--colors-indigo-9)"
+            strokeWidth={1}
+            strokeDasharray="3 2"
+            pointerEvents="none"
+          />
+        )}
 
         {/* Playhead — hidden until the rAF loop puts it on this row. */}
         <line
