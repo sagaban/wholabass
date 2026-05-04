@@ -119,20 +119,9 @@ async fn run_separate(
         .await
         .map_err(|e| e.to_string())?;
 
-    // Chain bass MIDI transcription. Errors here surface to the user but
-    // don't roll back stems — the user can retry.
-    let bass_path = out_dir.join("stems").join("bass.wav");
-    sc.call_with_progress(
-        "transcribe",
-        serde_json::json!({
-            "song_id": song_id,
-            "bass_path": bass_path.to_string_lossy(),
-            "out_dir": out_dir.to_string_lossy(),
-        }),
-        |progress, stage| emit_progress(&app_emit, progress, stage),
-    )
-    .await
-    .map_err(|e| format!("transcribe: {e}"))?;
+    // Bass MIDI transcription is no longer chained automatically — the
+    // user picks between auto-transcribe and uploading their own MIDI
+    // (e.g., a Songsterr / Guitar Pro export) in the Player UI.
 
     // Phase 2 beat / tempo grid for the tab renderer.
     sc.call_with_progress(
@@ -148,6 +137,36 @@ async fn run_separate(
     .map_err(|e| format!("beats: {e}"))?;
 
     parse_separate_response(&resp, song_id, out_dir)
+}
+
+/// Run basic-pitch on a song's bass stem and write `bass.mid`. Used when
+/// the user opts in to auto-transcription from the Player UI.
+#[tauri::command]
+async fn transcribe_song(
+    song_id: String,
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<(), String> {
+    let library_root = library::resolve_root(&app).map_err(|e| e.to_string())?;
+    let out_dir = library::song_dir(&library_root, &song_id);
+    let bass_path = out_dir.join("stems").join("bass.wav");
+    if !bass_path.is_file() {
+        return Err(format!("bass stem missing for {song_id}"));
+    }
+    let sc = take_sidecar(&state).await?;
+    let app_emit = app.clone();
+    sc.call_with_progress(
+        "transcribe",
+        serde_json::json!({
+            "song_id": song_id,
+            "bass_path": bass_path.to_string_lossy(),
+            "out_dir": out_dir.to_string_lossy(),
+        }),
+        |progress, stage| emit_progress(&app_emit, progress, stage),
+    )
+    .await
+    .map_err(|e| format!("transcribe: {e}"))?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -264,18 +283,17 @@ async fn retry_song(
     }
 
     let stems = library::all_stems_present(&library_root, &song_id);
-    let midi = library::has_midi(&library_root, &song_id);
     let beats = library::has_beats(&library_root, &song_id);
     let source = library::has_source(&library_root, &song_id);
 
-    if stems && midi && beats {
-        // All artifacts present. If meta.processing_version is stale (e.g.
-        // ingested before T13 added beats), bump it so the entry reads as
-        // ready — otherwise the retry button would stay "Retry" forever.
+    if stems && beats {
+        // All required artifacts present (bass.mid is optional). If
+        // meta.processing_version is stale, bump it so the entry shows
+        // as ready instead of stuck on "Retry".
         library::bump_processing_version(&library_root, &song_id, ids::PROCESSING_VERSION)
             .map_err(|e| format!("bump processing_version: {e}"))?;
         let meta = library::read_meta(&library_root, &song_id)
-            .ok_or_else(|| "stems + midi + beats present but meta missing".to_string())?;
+            .ok_or_else(|| "stems + beats present but meta missing".to_string())?;
         return Ok(IngestResult {
             song_id: song_id.clone(),
             title: meta.title,
@@ -293,7 +311,7 @@ async fn retry_song(
     }
 
     *state.current_ingest.lock().await = Some(song_id.clone());
-    let result = run_retry(&state, &app, &song_id, &out_dir, stems, midi).await;
+    let result = run_retry(&state, &app, &song_id, &out_dir, stems).await;
     *state.current_ingest.lock().await = None;
     result
 }
@@ -304,7 +322,6 @@ async fn run_retry(
     song_id: &str,
     out_dir: &std::path::Path,
     stems: bool,
-    midi: bool,
 ) -> Result<IngestResult, String> {
     let library_root = out_dir
         .parent()
@@ -312,35 +329,15 @@ async fn run_retry(
     let source_path = out_dir.join("source.wav");
 
     if !stems {
-        // Source exists but stems don't — resume at separate. run_separate
-        // chains transcribe + beats so we end up complete.
+        // Source exists but stems don't — resume at separate. The new
+        // pipeline runs separate + beats only (no auto-transcribe).
         let title = library::read_meta(library_root, song_id).map(|m| m.title);
         return run_separate(state, app, song_id, &source_path, out_dir, title.as_deref()).await;
     }
 
+    // Stems present, beats missing — just run beats.
     let sc = take_sidecar(state).await?;
     let app_emit = app.clone();
-
-    if !midi {
-        // Stems present, MIDI missing — run transcribe (then beats below).
-        let bass_path = out_dir.join("stems").join("bass.wav");
-        sc.call_with_progress(
-            "transcribe",
-            serde_json::json!({
-                "song_id": song_id,
-                "bass_path": bass_path.to_string_lossy(),
-                "out_dir": out_dir.to_string_lossy(),
-            }),
-            |progress, stage| emit_progress(&app_emit, progress, stage),
-        )
-        .await
-        .map_err(|e| format!("transcribe: {e}"))?;
-    }
-
-    // Beats are always the last step, and they're the cheapest to redo, so
-    // we run them whenever this branch is reached (stems + midi present →
-    // only beats missing; stems present + midi missing → we just produced
-    // midi and now need beats).
     sc.call_with_progress(
         "beats",
         serde_json::json!({
@@ -353,9 +350,8 @@ async fn run_retry(
     .await
     .map_err(|e| format!("beats: {e}"))?;
 
-    // Resume paths that don't go through `separate` (transcribe-only,
-    // beats-only) skip the sidecar's meta.json rewrite, so we bump the
-    // version here to mark the entry ready.
+    // Resume path skips the sidecar's meta.json rewrite, so bump the
+    // version here.
     library::bump_processing_version(library_root, song_id, ids::PROCESSING_VERSION)
         .map_err(|e| format!("bump processing_version: {e}"))?;
     let meta = library::read_meta(library_root, song_id)
@@ -430,6 +426,39 @@ async fn read_midi(song_id: String, app: AppHandle) -> Result<tauri::ipc::Respon
         .await
         .map_err(|e| format!("read {}: {e}", path.display()))?;
     Ok(tauri::ipc::Response::new(bytes))
+}
+
+/// Replace the song's `bass.mid` with user-supplied bytes (e.g., from a
+/// Songsterr / Guitar Pro export converted to standard MIDI). The
+/// pipeline's beats.json + stems are left alone — the user is replacing
+/// the *transcribed* bass line, not re-running ML.
+///
+/// We only do a minimal sanity check (MThd header, length cap) so a
+/// stray `.txt` doesn't silently pass through; the frontend is the
+/// source of truth for "this is a MIDI file the user wants to use".
+#[tauri::command]
+async fn replace_bass_midi(
+    song_id: String,
+    bytes: Vec<u8>,
+    app: AppHandle,
+) -> Result<(), String> {
+    if bytes.len() < 4 || &bytes[0..4] != b"MThd" {
+        return Err("not a Standard MIDI file (missing MThd header)".to_string());
+    }
+    // 50 MB ceiling — typical bass MIDIs are <100 KB; anything larger is
+    // probably not what the user thinks it is.
+    if bytes.len() > 50 * 1024 * 1024 {
+        return Err(format!("midi too large: {} bytes", bytes.len()));
+    }
+    let library_root = library::resolve_root(&app).map_err(|e| e.to_string())?;
+    let dir = library::song_dir(&library_root, &song_id);
+    if !dir.is_dir() {
+        return Err(format!("song dir missing for {song_id}"));
+    }
+    let path = library::midi_path(&library_root, &song_id);
+    tokio::fs::write(&path, bytes)
+        .await
+        .map_err(|e| format!("write {}: {e}", path.display()))
 }
 
 #[tauri::command]
@@ -557,6 +586,8 @@ pub fn run() {
             delete_song,
             read_stem,
             read_midi,
+            replace_bass_midi,
+            transcribe_song,
             read_beats,
             read_edits,
             write_edits,

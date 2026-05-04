@@ -70,9 +70,31 @@ export interface EditsFile {
   version: number;
   notes: EditOp[];
   sections: SectionLabel[];
+  /**
+   * Song-time shift applied to every MIDI event when loading bass.mid.
+   * Lets the user align an uploaded GP / Songsterr export to where the
+   * bass actually enters in the audio (their `t = 0` rarely matches).
+   * Default 0; can be negative.
+   */
+  midiOffsetSec?: number;
+  /**
+   * Playback-rate multiplier for the MIDI relative to the audio. 1.0 =
+   * use the file's native timing; >1 speeds it up (notes happen
+   * earlier), <1 slows it down. Useful when the uploaded tab was
+   * notated at a different BPM than the recording.
+   *
+   * Applied as: `songT = midiT / midiSpeed + midiOffsetSec`.
+   */
+  midiSpeed?: number;
 }
 
-export const EMPTY_EDITS: EditsFile = { version: EDITS_VERSION, notes: [], sections: [] };
+export const EMPTY_EDITS: EditsFile = {
+  version: EDITS_VERSION,
+  notes: [],
+  sections: [],
+  midiOffsetSec: 0,
+  midiSpeed: 1,
+};
 
 export function noteId(startSec: number, pitch: number): NoteId {
   return `${startSec.toFixed(4)}-${pitch}`;

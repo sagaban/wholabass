@@ -19,8 +19,10 @@ type Track = StemName | "midi";
 const TRACKS: readonly Track[] = [...STEM_NAMES, "midi"] as const;
 
 const INITIAL_STEM_STRIP: StripState = { volume: 1, muted: false, soloed: false };
-// MIDI is silent by default — user opts in via volume or solo.
-const INITIAL_MIDI_STRIP: StripState = { volume: 0, muted: false, soloed: false };
+// MIDI starts audible (a touch lower than the stems) so a freshly
+// uploaded / transcribed bass is heard right away. The user can always
+// pull it down or mute the strip if they only want the audio mix.
+const INITIAL_MIDI_STRIP: StripState = { volume: 0.8, muted: false, soloed: false };
 const STRIP_GRID_COLS = "70px 1fr 36px 70px";
 
 function effectiveTrackGain(strip: StripState, anySoloed: boolean): number {

@@ -68,10 +68,10 @@ describe("notesToSchedule", () => {
       [note(0, 0.1, 40, 0.0), note(0.2, 0.1, 40, 0.5), note(0.4, 0.1, 40, 1.0)],
       { songOffset: 0, ctxStart: 0, tempo: 1 },
     );
-    // Floor 0.2 × scale 0.3 = 0.06
-    expect(evts[0].peakGain).toBeCloseTo(0.06, 6);
-    expect(evts[1].peakGain).toBeCloseTo(0.15, 6);
-    expect(evts[2].peakGain).toBeCloseTo(0.3, 6);
+    // Floor 0.2 × scale 0.7 = 0.14
+    expect(evts[0].peakGain).toBeCloseTo(0.14, 6);
+    expect(evts[1].peakGain).toBeCloseTo(0.35, 6);
+    expect(evts[2].peakGain).toBeCloseTo(0.7, 6);
   });
 });
 

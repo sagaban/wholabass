@@ -30,6 +30,12 @@ import { beatIndexAt, localBeatDuration } from "@/tab/rhythm";
 
 interface TabProps {
   songId: string;
+  /**
+   * Bumped by the parent when bass.mid is replaced on disk so we
+   * reload + re-run the optimizer. Otherwise the load effect would
+   * only refire on songId change.
+   */
+  tabSourceRev: number;
   engine: StemEngine;
   durationSec: number;
   edits: EditsFile;
@@ -44,22 +50,42 @@ interface BeatsPayload {
 
 type LoadStatus = "loading" | "ready" | { kind: "error"; message: string };
 
-export function Tab({ songId, engine, durationSec, edits, onEdit, onRemoveSectionAt }: TabProps) {
+export function Tab({
+  songId,
+  tabSourceRev,
+  engine,
+  durationSec,
+  edits,
+  onEdit,
+  onRemoveSectionAt,
+}: TabProps) {
   const [optimizerNotes, setOptimizerNotes] = useState<TabNote[]>([]);
   const [beats, setBeats] = useState<BeatsPayload | null>(null);
   const [status, setStatus] = useState<LoadStatus>("loading");
 
+  const midiOffsetSec = edits.midiOffsetSec ?? 0;
+  const midiSpeed = edits.midiSpeed && edits.midiSpeed > 0 ? edits.midiSpeed : 1;
   useEffect(() => {
     let cancelled = false;
     setStatus("loading");
     void (async () => {
       try {
-        const [notes, b] = await Promise.all([
-          loadBassNotes(songId),
-          invoke<BeatsPayload>("read_beats", { songId }),
-        ]);
+        // Beats are required (the tab grid needs them); bass.mid is
+        // optional now — a missing file just yields an empty tab so the
+        // user can upload or auto-transcribe from the Tab source card.
+        const b = await invoke<BeatsPayload>("read_beats", { songId });
+        const raw = await loadBassNotes(songId).catch(() => [] as BassNote[]);
         if (cancelled) return;
-        setOptimizerNotes(fingerNotes(notes as readonly BassNote[]));
+        const shifted: BassNote[] =
+          midiOffsetSec === 0 && midiSpeed === 1
+            ? raw.slice()
+            : raw.map((n) => ({
+                pitch: n.pitch,
+                velocity: n.velocity,
+                startSec: n.startSec / midiSpeed + midiOffsetSec,
+                durSec: n.durSec / midiSpeed,
+              }));
+        setOptimizerNotes(fingerNotes(shifted as readonly BassNote[]));
         setBeats(b);
         setStatus("ready");
       } catch (err: unknown) {
@@ -69,7 +95,7 @@ export function Tab({ songId, engine, durationSec, edits, onEdit, onRemoveSectio
     return () => {
       cancelled = true;
     };
-  }, [songId]);
+  }, [songId, tabSourceRev, midiOffsetSec, midiSpeed]);
 
   const displayNotes = useMemo(() => applyEdits(optimizerNotes, edits), [optimizerNotes, edits]);
 

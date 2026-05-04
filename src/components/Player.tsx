@@ -15,7 +15,14 @@ import {
   type StemName,
   type StretcherNode,
 } from "@/audio/engine";
-import { loadBassNotes, type BassNote } from "@/audio/midi";
+import {
+  describeMidiTracks,
+  extractTrackToMidi,
+  loadBassNotes,
+  suggestBassTrack,
+  type BassNote,
+  type MidiTrackInfo,
+} from "@/audio/midi";
 import { MidiSynth } from "@/audio/midi-synth";
 import { StemMixer } from "@/components/StemMixer";
 import { PianoRoll } from "@/components/PianoRoll";
@@ -37,13 +44,33 @@ interface PlayerProps {
   songId: string;
 }
 
+/**
+ * Apply the user's MIDI offset + speed to a raw bass-note list. Pure;
+ * exported only to share the formula between the synth load and the
+ * tab load (Tab.tsx duplicates the same shape).
+ */
+function mapMidiNotes(raw: readonly BassNote[], offsetSec: number, speed: number): BassNote[] {
+  if (offsetSec === 0 && speed === 1) return raw.slice();
+  return raw.map((n) => ({
+    pitch: n.pitch,
+    velocity: n.velocity,
+    startSec: n.startSec / speed + offsetSec,
+    durSec: n.durSec / speed,
+  }));
+}
+
 function normalizeEditsFile(raw: unknown): EditsFile {
   if (!raw || typeof raw !== "object") return EMPTY_EDITS;
   const r = raw as Partial<EditsFile>;
+  const speedRaw = typeof r.midiSpeed === "number" ? r.midiSpeed : 1;
   return {
     version: typeof r.version === "number" ? r.version : EMPTY_EDITS.version,
     notes: Array.isArray(r.notes) ? (r.notes as EditOp[]) : [],
     sections: Array.isArray(r.sections) ? r.sections : [],
+    midiOffsetSec: typeof r.midiOffsetSec === "number" ? r.midiOffsetSec : 0,
+    // Clamp to a sane range so a corrupt edits file can't divide-by-zero
+    // the time mapping or produce century-long bass notes.
+    midiSpeed: speedRaw > 0.1 && speedRaw < 5 ? speedRaw : 1,
   };
 }
 
@@ -75,6 +102,8 @@ export function Player({ songId }: PlayerProps) {
   // we clear the engine loop. -1 means "no section is driving the loop"
   // (the user is using A-B as a free-form scratch loop).
   const sectionLoopsLeftRef = useRef(-1);
+  // Bumped after the user replaces bass.mid via upload, so Tab reloads.
+  const [tabSourceRev, setTabSourceRev] = useState(0);
 
   const onEdit = useCallback((op: EditOp) => {
     editsDirtyRef.current = true;
@@ -101,6 +130,23 @@ export function Player({ songId }: PlayerProps) {
   const onRemoveSectionAt = useCallback((index: number) => {
     editsDirtyRef.current = true;
     setEdits((prev) => ({ ...prev, sections: removeSectionAt(prev.sections, index) }));
+  }, []);
+
+  const onSetMidiOffset = useCallback((offsetSec: number) => {
+    editsDirtyRef.current = true;
+    setEdits((prev) => ({ ...prev, midiOffsetSec: offsetSec }));
+  }, []);
+
+  const onAlignMidiToPlayhead = useCallback(() => {
+    const engine = engineRef.current;
+    if (!engine) return;
+    onSetMidiOffset(engine.getCurrentTime());
+  }, [onSetMidiOffset]);
+
+  const onSetMidiSpeed = useCallback((speed: number) => {
+    const clamped = Math.max(0.1, Math.min(5, speed));
+    editsDirtyRef.current = true;
+    setEdits((prev) => ({ ...prev, midiSpeed: clamped }));
   }, []);
 
   const onSetSectionRepeats = useCallback((index: number, repeats: number) => {
@@ -168,16 +214,11 @@ export function Player({ songId }: PlayerProps) {
           synthRef.current = new MidiSynth(ctx);
         }
 
-        const [buffers, notes] = await Promise.all([
-          loadStemBuffers(ctx, songId),
-          loadBassNotes(songId).catch(() => [] as BassNote[]),
-        ]);
+        const buffers = await loadStemBuffers(ctx, songId);
         if (cancelled) return;
 
         const engine = engineRef.current;
         engine.load(buffers);
-        bassNotesRef.current = notes;
-        synthRef.current.setNotes(notes);
         setDuration(engine.duration);
         setLoad({ kind: "ready" });
       } catch (err: unknown) {
@@ -194,6 +235,35 @@ export function Player({ songId }: PlayerProps) {
       synthRef.current?.cancel();
     };
   }, [songId]);
+
+  // Load bass MIDI separately so a user-uploaded replacement (which
+  // bumps tabSourceRev) can refresh the synth without re-decoding the
+  // 4 stem WAVs. Empty notes when bass.mid is missing. The offset +
+  // speed dependencies mean the synth also refreshes when the user
+  // nudges either control.
+  const midiOffsetSec = edits.midiOffsetSec ?? 0;
+  const midiSpeed = edits.midiSpeed && edits.midiSpeed > 0 ? edits.midiSpeed : 1;
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const raw = await loadBassNotes(songId).catch(() => [] as BassNote[]);
+      if (cancelled) return;
+      const notes = mapMidiNotes(raw, midiOffsetSec, midiSpeed);
+      bassNotesRef.current = notes;
+      const synth = synthRef.current;
+      if (synth) {
+        synth.cancel();
+        synth.setNotes(notes);
+        const engine = engineRef.current;
+        if (engine?.isPlaying) {
+          synth.schedule(engine.getCurrentTime(), engine.getTempo());
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [songId, tabSourceRev, midiOffsetSec, midiSpeed]);
 
   // Drive the position display while playing; tick the loop watcher too.
   useEffect(() => {
@@ -467,6 +537,16 @@ export function Player({ songId }: PlayerProps) {
             </styled.span>
           </HStack>
 
+          <TabSourceCard
+            songId={songId}
+            offsetSec={midiOffsetSec}
+            speed={midiSpeed}
+            onSetOffset={onSetMidiOffset}
+            onAlignToPlayhead={onAlignMidiToPlayhead}
+            onSetSpeed={onSetMidiSpeed}
+            onReplaced={() => setTabSourceRev((r) => r + 1)}
+          />
+
           <SectionsList
             sections={edits.sections}
             onPlay={onPlaySection}
@@ -493,6 +573,7 @@ export function Player({ songId }: PlayerProps) {
         {engineRef.current && (
           <Tab
             songId={songId}
+            tabSourceRev={tabSourceRev}
             engine={engineRef.current}
             durationSec={duration}
             edits={edits}
@@ -565,6 +646,402 @@ function fmtTime(seconds: number): string {
   const m = Math.floor(seconds / 60);
   const s = Math.floor(seconds % 60);
   return `${m}:${s.toString().padStart(2, "0")}`;
+}
+
+interface TabSourceCardProps {
+  songId: string;
+  offsetSec: number;
+  speed: number;
+  onSetOffset: (sec: number) => void;
+  onAlignToPlayhead: () => void;
+  onSetSpeed: (speed: number) => void;
+  onReplaced: () => void;
+}
+
+function TabSourceCard({
+  songId,
+  offsetSec,
+  speed,
+  onSetOffset,
+  onAlignToPlayhead,
+  onSetSpeed,
+  onReplaced,
+}: TabSourceCardProps) {
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const [status, setStatus] = useState<
+    | { kind: "idle" }
+    | { kind: "uploading" }
+    | { kind: "transcribing" }
+    | { kind: "ok" }
+    | { kind: "error"; message: string }
+  >({ kind: "idle" });
+  const [pendingPick, setPendingPick] = useState<{
+    buffer: ArrayBuffer;
+    tracks: MidiTrackInfo[];
+    suggested: number;
+  } | null>(null);
+
+  const commitBytes = async (bytes: Uint8Array) => {
+    setStatus({ kind: "uploading" });
+    try {
+      await invoke("replace_bass_midi", { songId, bytes: Array.from(bytes) });
+      setStatus({ kind: "ok" });
+      onReplaced();
+    } catch (err: unknown) {
+      setStatus({ kind: "error", message: String(err) });
+    }
+  };
+
+  const onFile = async (file: File) => {
+    try {
+      const buffer = await file.arrayBuffer();
+      const tracks = describeMidiTracks(buffer);
+      const populated = tracks.filter((t) => t.noteCount > 0);
+      // Single populated track → upload as-is, no picker.
+      if (populated.length <= 1) {
+        await commitBytes(new Uint8Array(buffer));
+        return;
+      }
+      setPendingPick({ buffer, tracks, suggested: suggestBassTrack(tracks) });
+    } catch (err: unknown) {
+      setStatus({ kind: "error", message: String(err) });
+    }
+  };
+
+  const onPickTrack = async (index: number) => {
+    if (!pendingPick) return;
+    try {
+      const bytes = extractTrackToMidi(pendingPick.buffer, index);
+      setPendingPick(null);
+      await commitBytes(bytes);
+    } catch (err: unknown) {
+      setStatus({ kind: "error", message: String(err) });
+      setPendingPick(null);
+    }
+  };
+
+  const onTranscribe = async () => {
+    setStatus({ kind: "transcribing" });
+    try {
+      await invoke("transcribe_song", { songId });
+      setStatus({ kind: "ok" });
+      onReplaced();
+    } catch (err: unknown) {
+      setStatus({ kind: "error", message: String(err) });
+    }
+  };
+
+  const busy = status.kind === "uploading" || status.kind === "transcribing";
+
+  return (
+    <Box
+      p="3"
+      borderWidth="1px"
+      borderColor="border"
+      borderRadius="l3"
+      display="flex"
+      flexDirection="column"
+      gap="2"
+    >
+      <styled.div fontSize="sm" fontWeight="semibold">
+        Tab source
+      </styled.div>
+      <styled.span fontSize="xs" opacity="0.6">
+        Auto-transcribe the isolated bass with basic-pitch, or upload your own MIDI (e.g., a Guitar
+        Pro export saved as .mid).
+      </styled.span>
+      <HStack gap="2" alignItems="center" flexWrap="wrap">
+        <Button size="xs" variant="outline" onClick={onTranscribe} disabled={busy}>
+          Auto-transcribe
+        </Button>
+        <Button
+          size="xs"
+          variant="outline"
+          onClick={() => inputRef.current?.click()}
+          disabled={busy}
+        >
+          Upload .mid…
+        </Button>
+        <styled.input
+          ref={inputRef}
+          type="file"
+          accept=".mid,.midi,audio/midi"
+          display="none"
+          onChange={(e) => {
+            const f = e.currentTarget.files?.[0];
+            if (f) void onFile(f);
+            e.currentTarget.value = "";
+          }}
+        />
+        {status.kind === "uploading" && (
+          <styled.span fontSize="xs" opacity="0.6">
+            uploading…
+          </styled.span>
+        )}
+        {status.kind === "transcribing" && (
+          <styled.span fontSize="xs" opacity="0.6">
+            transcribing… (basic-pitch on bass stem)
+          </styled.span>
+        )}
+        {status.kind === "ok" && (
+          <styled.span fontSize="xs" color="indigo.11">
+            updated ✓
+          </styled.span>
+        )}
+        {status.kind === "error" && (
+          <styled.span fontSize="xs" color="error">
+            {status.message}
+          </styled.span>
+        )}
+      </HStack>
+
+      <OffsetControls
+        offsetSec={offsetSec}
+        onSetOffset={onSetOffset}
+        onAlignToPlayhead={onAlignToPlayhead}
+      />
+      <SpeedControls speed={speed} onSetSpeed={onSetSpeed} />
+
+      <TrackPickerDialog
+        open={pendingPick !== null}
+        tracks={pendingPick?.tracks ?? []}
+        suggested={pendingPick?.suggested ?? 0}
+        onPick={onPickTrack}
+        onCancel={() => setPendingPick(null)}
+      />
+    </Box>
+  );
+}
+
+interface OffsetControlsProps {
+  offsetSec: number;
+  onSetOffset: (sec: number) => void;
+  onAlignToPlayhead: () => void;
+}
+
+function OffsetControls({ offsetSec, onSetOffset, onAlignToPlayhead }: OffsetControlsProps) {
+  // Mirror the value to a string locally so the user can clear / type a
+  // sign without us snapping it back on every keystroke.
+  const [text, setText] = useState(offsetSec.toFixed(2));
+  useEffect(() => {
+    setText(offsetSec.toFixed(2));
+  }, [offsetSec]);
+
+  const commit = (raw: string) => {
+    const n = Number.parseFloat(raw);
+    const next = Number.isFinite(n) ? n : 0;
+    setText(next.toFixed(2));
+    if (Math.abs(next - offsetSec) > 1e-6) onSetOffset(next);
+  };
+
+  const nudge = (delta: number) => {
+    const next = +(offsetSec + delta).toFixed(3);
+    onSetOffset(next);
+  };
+
+  return (
+    <HStack gap="2" alignItems="center" flexWrap="wrap">
+      <styled.span fontSize="xs" opacity="0.7" minWidth="56px">
+        MIDI offset
+      </styled.span>
+      <Button
+        size="xs"
+        variant="outline"
+        onClick={() => nudge(-0.05)}
+        aria-label="nudge offset back 50ms"
+      >
+        −50 ms
+      </Button>
+      <styled.input
+        type="number"
+        step="0.01"
+        value={text}
+        onChange={(e) => setText(e.currentTarget.value)}
+        onBlur={(e) => commit(e.currentTarget.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") commit(e.currentTarget.value);
+        }}
+        aria-label="midi offset seconds"
+        width="72px"
+        px="1"
+        py="0"
+        borderWidth="1px"
+        borderColor="border"
+        borderRadius="l1"
+        bg="canvas"
+        fontSize="xs"
+        fontVariantNumeric="tabular-nums"
+        textAlign="right"
+      />
+      <styled.span fontSize="xs" opacity="0.5">
+        s
+      </styled.span>
+      <Button
+        size="xs"
+        variant="outline"
+        onClick={() => nudge(0.05)}
+        aria-label="nudge offset forward 50ms"
+      >
+        +50 ms
+      </Button>
+      <Button size="xs" variant="outline" onClick={onAlignToPlayhead}>
+        Align to playhead
+      </Button>
+      {offsetSec !== 0 && (
+        <Button size="xs" variant="outline" onClick={() => onSetOffset(0)}>
+          Reset
+        </Button>
+      )}
+    </HStack>
+  );
+}
+
+interface SpeedControlsProps {
+  speed: number;
+  onSetSpeed: (speed: number) => void;
+}
+
+function SpeedControls({ speed, onSetSpeed }: SpeedControlsProps) {
+  // Display + edit as percent (100 = native) — easier on the ear than
+  // raw multipliers — but we round to 2 decimal places under the hood.
+  const [text, setText] = useState((speed * 100).toFixed(1));
+  useEffect(() => {
+    setText((speed * 100).toFixed(1));
+  }, [speed]);
+
+  const commit = (raw: string) => {
+    const n = Number.parseFloat(raw);
+    const next = Number.isFinite(n) && n > 0 ? n / 100 : 1;
+    setText((next * 100).toFixed(1));
+    if (Math.abs(next - speed) > 1e-6) onSetSpeed(next);
+  };
+
+  const nudge = (delta: number) => {
+    const next = +(speed + delta).toFixed(4);
+    onSetSpeed(next);
+  };
+
+  return (
+    <HStack gap="2" alignItems="center" flexWrap="wrap">
+      <styled.span fontSize="xs" opacity="0.7" minWidth="56px">
+        MIDI speed
+      </styled.span>
+      <Button size="xs" variant="outline" onClick={() => nudge(-0.005)} aria-label="slow midi 0.5%">
+        −0.5%
+      </Button>
+      <styled.input
+        type="number"
+        step="0.1"
+        value={text}
+        onChange={(e) => setText(e.currentTarget.value)}
+        onBlur={(e) => commit(e.currentTarget.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") commit(e.currentTarget.value);
+        }}
+        aria-label="midi speed percent"
+        width="72px"
+        px="1"
+        py="0"
+        borderWidth="1px"
+        borderColor="border"
+        borderRadius="l1"
+        bg="canvas"
+        fontSize="xs"
+        fontVariantNumeric="tabular-nums"
+        textAlign="right"
+      />
+      <styled.span fontSize="xs" opacity="0.5">
+        %
+      </styled.span>
+      <Button size="xs" variant="outline" onClick={() => nudge(0.005)} aria-label="fast midi 0.5%">
+        +0.5%
+      </Button>
+      {Math.abs(speed - 1) > 1e-6 && (
+        <Button size="xs" variant="outline" onClick={() => onSetSpeed(1)}>
+          Reset
+        </Button>
+      )}
+    </HStack>
+  );
+}
+
+interface TrackPickerDialogProps {
+  open: boolean;
+  tracks: readonly MidiTrackInfo[];
+  suggested: number;
+  onPick: (index: number) => void;
+  onCancel: () => void;
+}
+
+function pitchName(midi: number): string {
+  const names = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+  const octave = Math.floor(midi / 12) - 1;
+  return `${names[midi % 12]}${octave}`;
+}
+
+function TrackPickerDialog({ open, tracks, suggested, onPick, onCancel }: TrackPickerDialogProps) {
+  return (
+    <Dialog.Root open={open} onOpenChange={(d) => !d.open && onCancel()} lazyMount unmountOnExit>
+      <Dialog.Backdrop />
+      <Dialog.Positioner>
+        <Dialog.Content>
+          <Dialog.Title>Pick the bass track</Dialog.Title>
+          <Dialog.Description>
+            This MIDI has multiple tracks. Choose the one to import as the bass line — only the
+            picked track is saved as bass.mid.
+          </Dialog.Description>
+          <VStack gap="2" alignItems="stretch" mt="3">
+            {tracks.map((t) => {
+              const range = t.pitchRange
+                ? `${pitchName(t.pitchRange[0])}–${pitchName(t.pitchRange[1])}`
+                : "empty";
+              const isSuggested = t.index === suggested;
+              return (
+                <HStack
+                  key={t.index}
+                  gap="2"
+                  alignItems="center"
+                  justifyContent="space-between"
+                  p="2"
+                  borderWidth="1px"
+                  borderColor={isSuggested ? "indigo.7" : "border"}
+                  borderRadius="l1"
+                >
+                  <VStack alignItems="flex-start" gap="0">
+                    <styled.span fontSize="sm" fontWeight="semibold">
+                      {t.name}
+                      {isSuggested && (
+                        <styled.span ml="2" fontSize="xs" color="indigo.11">
+                          (suggested)
+                        </styled.span>
+                      )}
+                    </styled.span>
+                    <styled.span fontSize="xs" opacity="0.6" fontVariantNumeric="tabular-nums">
+                      {t.noteCount} note{t.noteCount === 1 ? "" : "s"} · {range}
+                      {t.programIsBass && " · GM bass"}
+                    </styled.span>
+                  </VStack>
+                  <Button
+                    size="xs"
+                    variant={isSuggested ? "solid" : "outline"}
+                    onClick={() => onPick(t.index)}
+                    disabled={t.noteCount === 0}
+                  >
+                    Use this
+                  </Button>
+                </HStack>
+              );
+            })}
+            <HStack justifyContent="flex-end" mt="2">
+              <Button size="sm" variant="outline" onClick={onCancel}>
+                Cancel
+              </Button>
+            </HStack>
+          </VStack>
+        </Dialog.Content>
+      </Dialog.Positioner>
+    </Dialog.Root>
+  );
 }
 
 interface SectionsListProps {

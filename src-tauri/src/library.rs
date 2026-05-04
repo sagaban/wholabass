@@ -159,7 +159,9 @@ pub fn is_ready(root: &Path, id: &str, processing_version: u32) -> bool {
     if meta.processing_version != processing_version {
         return false;
     }
-    all_stems_present(root, id) && has_midi(root, id) && has_beats(root, id)
+    // bass.mid is no longer required — the user picks between
+    // auto-transcribe and uploading their own MIDI in the Player.
+    all_stems_present(root, id) && has_beats(root, id)
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -193,7 +195,7 @@ pub fn list(root: &Path, processing_version: u32) -> Vec<LibraryEntry> {
             let midi = has_midi(root, &id);
             let source = has_source(root, &id);
             let beats = has_beats(root, &id);
-            let ready = meta.processing_version == processing_version && stems && midi && beats;
+            let ready = meta.processing_version == processing_version && stems && beats;
             Some(LibraryEntry {
                 song_id: meta.song_id,
                 title: meta.title,
@@ -334,11 +336,13 @@ mod tests {
     }
 
     #[test]
-    fn is_ready_false_when_midi_missing() {
+    fn is_ready_true_when_midi_missing() {
+        // bass.mid is no longer required for readiness — users pick
+        // between auto-transcribe and upload after stems are ready.
         let root = fresh_temp_root();
         write_complete_cache(&root, "abc", 1);
         std::fs::remove_file(midi_path(&root, "abc")).unwrap();
-        assert!(!is_ready(&root, "abc", 1));
+        assert!(is_ready(&root, "abc", 1));
         std::fs::remove_dir_all(&root).ok();
     }
 

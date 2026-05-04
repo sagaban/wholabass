@@ -3,9 +3,12 @@
  * sync with `StemEngine` by scheduling oscillators at AudioContext
  * times computed from the engine's song-time + tempo.
  *
- * No Tone.js — bare Web Audio is plenty for a single triangle voice
- * with an ADSR envelope. The scheduling math is exported as a pure
- * function so it can be unit-tested without Web Audio.
+ * Per voice we run a sawtooth (overtones) + a sub-octave sine (body)
+ * through a low-pass filter with a small envelope on the cutoff so
+ * each note has a percussive front + warm sustain — closer to a
+ * fingered electric bass than the previous bare triangle.
+ * The scheduling math is exported as a pure function so it can be
+ * unit-tested without Web Audio.
  */
 
 import type { BassNote } from "@/audio/midi";
@@ -32,7 +35,11 @@ export interface ScheduleParams {
 }
 
 const VELOCITY_FLOOR = 0.2;
-const PEAK_GAIN_SCALE = 0.3;
+// The synth output is summed alongside the four stems; bumping the
+// per-voice peak from the previous 0.3 to 0.7 lands roughly at parity
+// with a typical pop-mix bass stem so the user can actually hear it
+// at default mixer settings.
+const PEAK_GAIN_SCALE = 0.7;
 
 function clamp(v: number, lo: number, hi: number): number {
   return v < lo ? lo : v > hi ? hi : v;
@@ -71,10 +78,18 @@ export function midiToFreq(pitch: number): number {
 }
 
 const ATTACK_SEC = 0.005;
-const RELEASE_SEC = 0.05;
+const RELEASE_SEC = 0.06;
+// Filter cutoff envelope: starts open for the percussive attack, decays
+// quickly to the body cutoff so sustained notes stay warm and not harsh.
+const FILTER_ATTACK_HZ = 2400;
+const FILTER_BODY_HZ = 600;
+const FILTER_DECAY_SEC = 0.12;
+const FILTER_Q = 4;
+const SUB_GAIN_SCALE = 0.6;
 
 interface ActiveVoice {
   src: OscillatorNode;
+  sub: OscillatorNode;
   gain: GainNode;
 }
 
@@ -132,6 +147,7 @@ export class MidiSynth {
         v.gain.gain.setValueAtTime(v.gain.gain.value, now);
         v.gain.gain.linearRampToValueAtTime(0, now + ATTACK_SEC);
         v.src.stop(now + ATTACK_SEC + 0.001);
+        v.sub.stop(now + ATTACK_SEC + 0.001);
       } catch {
         // Already stopped — ignore.
       }
@@ -140,28 +156,64 @@ export class MidiSynth {
   }
 
   private spawn(evt: ScheduledEvent): void {
-    const src = this.ctx.createOscillator();
-    src.type = "triangle";
-    src.frequency.setValueAtTime(midiToFreq(evt.pitch), evt.ctxStart);
+    const freq = midiToFreq(evt.pitch);
+    const subFreq = midiToFreq(evt.pitch - 12);
 
+    // Main oscillator — sawtooth gives the harmonic richness a real
+    // electric bass needs; the lowpass below tames the top.
+    const src = this.ctx.createOscillator();
+    src.type = "sawtooth";
+    src.frequency.setValueAtTime(freq, evt.ctxStart);
+
+    // Sub oscillator — sine an octave down for thickness, mixed in below
+    // unity so the fundamental doesn't dominate everything else.
+    const sub = this.ctx.createOscillator();
+    sub.type = "sine";
+    sub.frequency.setValueAtTime(subFreq, evt.ctxStart);
+    const subGain = this.ctx.createGain();
+    subGain.gain.setValueAtTime(SUB_GAIN_SCALE, evt.ctxStart);
+
+    // Lowpass with a percussive attack on cutoff — closed-mouth at the
+    // start, decays quickly to a warm body level for sustained notes.
+    const filter = this.ctx.createBiquadFilter();
+    filter.type = "lowpass";
+    filter.Q.setValueAtTime(FILTER_Q, evt.ctxStart);
+    filter.frequency.setValueAtTime(FILTER_ATTACK_HZ, evt.ctxStart);
+    filter.frequency.exponentialRampToValueAtTime(FILTER_BODY_HZ, evt.ctxStart + FILTER_DECAY_SEC);
+
+    // Amplitude envelope: short attack → peak → small decay to a 70%
+    // sustain → release on note end. linearRampToValueAtTime can't ramp
+    // to 0, so the release uses setTargetAtTime via two ramps instead.
     const gain = this.ctx.createGain();
+    const peak = evt.peakGain;
+    const sustain = peak * 0.7;
+    const bodyEnd = Math.max(evt.ctxStart + ATTACK_SEC + 0.05, evt.ctxEnd);
     gain.gain.setValueAtTime(0, evt.ctxStart);
-    gain.gain.linearRampToValueAtTime(evt.peakGain, evt.ctxStart + ATTACK_SEC);
-    const bodyEnd = Math.max(evt.ctxStart + ATTACK_SEC, evt.ctxEnd);
-    gain.gain.setValueAtTime(evt.peakGain, bodyEnd);
+    gain.gain.linearRampToValueAtTime(peak, evt.ctxStart + ATTACK_SEC);
+    gain.gain.linearRampToValueAtTime(sustain, evt.ctxStart + ATTACK_SEC + 0.08);
+    gain.gain.setValueAtTime(sustain, bodyEnd);
     gain.gain.linearRampToValueAtTime(0, bodyEnd + RELEASE_SEC);
 
-    src.connect(gain);
+    src.connect(filter);
+    sub.connect(subGain).connect(filter);
+    filter.connect(gain);
     gain.connect(this.master);
-    src.start(evt.ctxStart);
-    src.stop(bodyEnd + RELEASE_SEC + 0.01);
 
-    const voice: ActiveVoice = { src, gain };
+    src.start(evt.ctxStart);
+    sub.start(evt.ctxStart);
+    const stopAt = bodyEnd + RELEASE_SEC + 0.01;
+    src.stop(stopAt);
+    sub.stop(stopAt);
+
+    const voice: ActiveVoice = { src, sub, gain };
     src.addEventListener(
       "ended",
       () => {
         try {
           src.disconnect();
+          sub.disconnect();
+          subGain.disconnect();
+          filter.disconnect();
           gain.disconnect();
         } catch {
           // Already disconnected.
