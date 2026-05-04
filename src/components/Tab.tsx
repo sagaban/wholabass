@@ -9,10 +9,12 @@ import { Button, Popover } from "@/components/ui";
 import {
   barLineTimes,
   DEFAULT_LAYOUT,
+  planSystems,
+  rowTimeToX,
+  rowXToTime,
   stringIndexToY,
-  timeToX,
   totalHeight,
-  totalWidth,
+  type PlannedSystem,
 } from "@/tab/render";
 import { DEFAULT_TUNING, enumeratePlacements, fingerNotes, type TabNote } from "@/tab/optimizer";
 import { beamGroups, classifyNote, rhythmGlyph } from "@/tab/rhythm";
@@ -162,10 +164,10 @@ function TabSurface({
 }: TabSurfaceProps) {
   const layout = DEFAULT_LAYOUT;
   const scrollRef = useRef<HTMLDivElement | null>(null);
-  const svgRef = useRef<SVGSVGElement | null>(null);
-  const playheadRef = useRef<SVGLineElement | null>(null);
+  const systemElsRef = useRef<Map<number, HTMLDivElement>>(new Map());
+  const playheadRefs = useRef<Map<number, SVGLineElement>>(new Map());
+  const activeIdxRef = useRef<number>(-1);
 
-  const width = totalWidth(durationSec, layout);
   const height = totalHeight(layout);
   const bars = useMemo(
     () => barLineTimes(beats.beats, layout.beatsPerBar),
@@ -173,69 +175,151 @@ function TabSurface({
   );
   const groups = useMemo(() => beamGroups(tabNotes, beats.beats), [tabNotes, beats.beats]);
 
+  // Container width drives how many bars fit per row. ResizeObserver
+  // keeps it in sync with window resizes / parent layout changes.
+  const [containerWidth, setContainerWidth] = useState(0);
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const update = () => setContainerWidth(el.clientWidth);
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
+  const targetRowPx = Math.max(200, containerWidth - 16);
+  const systems = useMemo(
+    () => planSystems(durationSec, bars, layout, targetRowPx),
+    [durationSec, bars, layout, targetRowPx],
+  );
+
+  // Pre-slice notes / groups / sections once per (systems, data) change so
+  // each row gets only what it needs to render.
+  const sliced = useMemo(() => {
+    return systems.map((sys) => {
+      const sysNotes: TabNote[] = [];
+      const noteIndexMap = new Map<number, number>(); // global → local index
+      for (let i = 0; i < tabNotes.length; i++) {
+        const n = tabNotes[i];
+        if (n.startSec >= sys.startSec && n.startSec < sys.endSec) {
+          noteIndexMap.set(i, sysNotes.length);
+          sysNotes.push(n);
+        }
+      }
+      const sysGroups = groups
+        .map((g) => ({
+          beamLevels: g.beamLevels,
+          indices: g.indices
+            .map((gi) => noteIndexMap.get(gi))
+            .filter((v): v is number => v !== undefined),
+        }))
+        .filter((g) => g.indices.length > 0);
+      const sysSections = sections
+        .map((sec, sectionIdx) => ({ sec, sectionIdx }))
+        .filter(({ sec }) => sec.startSec < sys.endSec && sec.endSec > sys.startSec)
+        .map(({ sec, sectionIdx }) => ({
+          sectionIdx,
+          name: sec.name,
+          repeats: sec.repeats,
+          startSec: Math.max(sec.startSec, sys.startSec),
+          endSec: Math.min(sec.endSec, sys.endSec),
+          fullSection: sec,
+          startsHere: sec.startSec >= sys.startSec,
+        }));
+      return { sysNotes, sysGroups, sysSections };
+    });
+  }, [systems, tabNotes, groups, sections]);
+
   const [selectedId, setSelectedId] = useState<NoteId | null>(null);
   const selectedNote = useMemo(
     () => (selectedId ? (tabNotes.find((n) => tabNoteId(n) === selectedId) ?? null) : null),
     [selectedId, tabNotes],
   );
+  const selectedNoteSystemIdx = useMemo(() => {
+    if (!selectedNote) return -1;
+    return systems.findIndex(
+      (sys) => selectedNote.startSec >= sys.startSec && selectedNote.startSec < sys.endSec,
+    );
+  }, [selectedNote, systems]);
   const closePopover = useCallback(() => setSelectedId(null), []);
 
-  const [addTarget, setAddTarget] = useState<AddNoteTarget | null>(null);
+  const [addTarget, setAddTarget] = useState<(AddNoteTarget & { systemIdx: number }) | null>(null);
   const closeAdd = useCallback(() => setAddTarget(null), []);
   const [selectedSectionIdx, setSelectedSectionIdx] = useState<number | null>(null);
   const closeSection = useCallback(() => setSelectedSectionIdx(null), []);
 
+  // Compute the song-time → (system, local x) mapping used by every
+  // mouse-driven coord conversion. Memoised on systems only.
+  const findSystem = useCallback(
+    (timeSec: number): number => {
+      for (let i = 0; i < systems.length; i++) {
+        const sys = systems[i];
+        if (timeSec >= sys.startSec && timeSec < sys.endSec) return i;
+      }
+      return systems.length - 1;
+    },
+    [systems],
+  );
+
   const handleStaffClick = useCallback(
-    (e: React.MouseEvent<SVGElement>) => {
-      // Only fire when the user clicked the SVG background (or a non-note
-      // child like a string line). Note groups stopPropagation already.
+    (e: React.MouseEvent<SVGElement>, systemIdx: number) => {
       if (e.defaultPrevented) return;
-      const svg = svgRef.current;
-      if (!svg) return;
+      const svg = e.currentTarget as SVGSVGElement;
       const pt = svg.createSVGPoint();
       pt.x = e.clientX;
       pt.y = e.clientY;
-      const screenCTM = svg.getScreenCTM();
-      if (!screenCTM) return;
-      const local = pt.matrixTransform(screenCTM.inverse());
-      // Reject clicks above the staff (where bar numbers + sections live).
+      const ctm = svg.getScreenCTM();
+      if (!ctm) return;
+      const local = pt.matrixTransform(ctm.inverse());
       if (local.y < layout.topPadding - 6) return;
+      const sys = systems[systemIdx];
+      if (!sys) return;
       const stringIdx = closestString(local.y, layout);
-      const startSec = snapToSixteenth(local.x / layout.pixelsPerSecond, beats.beats);
+      const localTime = rowXToTime(sys, local.x);
+      const startSec = snapToSixteenth(localTime, beats.beats);
+      if (startSec >= durationSec) return;
+      const targetSystemIdx = findSystem(startSec);
+      const targetSys = systems[targetSystemIdx];
+      if (!targetSys) return;
       setAddTarget({
+        systemIdx: targetSystemIdx,
         startSec,
         string: stringIdx,
-        x: timeToX(startSec, layout),
+        x: rowTimeToX(targetSys, startSec),
         y: stringIndexToY(stringIdx, layout),
       });
     },
-    [beats.beats, layout],
+    [systems, beats.beats, layout, durationSec, findSystem],
   );
 
-  // rAF loop: move the playhead and keep it visible.
-  // While playing → hold the playhead at ~25% from the viewport's left edge.
-  // While paused → only nudge if the user seeked the playhead off-screen,
-  // so manual scrolling for inspection isn't fought by the loop.
+  // rAF: place playhead in the active system, scroll that row into view
+  // when it changes (or when the user is mid-playback and seeks).
   useEffect(() => {
     let raf = 0;
-    const margin = 60;
     const tick = () => {
       const t = engine.getCurrentTime();
-      const x = timeToX(t, layout);
-      const playhead = playheadRef.current;
-      if (playhead) {
-        playhead.setAttribute("x1", String(x));
-        playhead.setAttribute("x2", String(x));
-      }
-      const scroller = scrollRef.current;
-      if (scroller) {
-        const viewport = scroller.clientWidth;
-        const offsetInView = x - scroller.scrollLeft;
-        const offscreen = offsetInView < margin || offsetInView > viewport - margin;
-        if (engine.isPlaying || offscreen) {
-          const target = Math.max(0, x - viewport * 0.25);
-          if (Math.abs(scroller.scrollLeft - target) > 4) {
-            scroller.scrollLeft = target;
+      const idx = findSystem(t);
+      const sys = systems[idx];
+      if (sys) {
+        const localX = rowTimeToX(sys, t);
+        const ph = playheadRefs.current.get(idx);
+        if (ph) {
+          ph.setAttribute("x1", String(localX));
+          ph.setAttribute("x2", String(localX));
+        }
+        // Hide playheads on other rows.
+        if (idx !== activeIdxRef.current) {
+          const oldPh = playheadRefs.current.get(activeIdxRef.current);
+          if (oldPh) {
+            oldPh.setAttribute("x1", "-10");
+            oldPh.setAttribute("x2", "-10");
+          }
+          activeIdxRef.current = idx;
+          // Auto-scroll active row into the viewport.
+          const rowEl = systemElsRef.current.get(idx);
+          if (rowEl) {
+            rowEl.scrollIntoView({ block: "nearest", behavior: "smooth" });
           }
         }
       }
@@ -243,7 +327,7 @@ function TabSurface({
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [engine, layout]);
+  }, [engine, layout, systems, findSystem]);
 
   return (
     <Box mt="3">
@@ -256,50 +340,197 @@ function TabSurface({
         borderWidth="1px"
         borderColor="border"
         borderRadius="l2"
-        overflowX="auto"
-        overflowY="hidden"
+        overflowX="hidden"
+        overflowY="auto"
         bg="canvas"
-        height={`${height + 4}px`}
+        maxHeight="calc(100vh - 240px)"
+        display="flex"
+        flexDirection="column"
+        gap="1"
+        p="2"
       >
-        {/* oxlint-disable-next-line jsx-a11y/click-events-have-key-events */}
-        <svg
-          ref={svgRef}
-          width={width}
-          height={height}
-          role="application"
-          aria-label="bass tab editor"
-          onClick={handleStaffClick}
-          className={css({ display: "block", fontFamily: "inherit" })}
-        >
-          {/* Section bands above the staff */}
-          {sections.map((section, idx) => {
-            const x1 = timeToX(section.startSec, layout);
-            const x2 = timeToX(section.endSec, layout);
-            const isSelected = selectedSectionIdx === idx;
-            const labelText =
-              section.repeats && section.repeats > 1
-                ? `${section.name} ×${section.repeats}`
-                : section.name;
-            return (
-              <g
-                key={`section-${section.startSec.toFixed(3)}-${section.endSec.toFixed(3)}-${section.name}`}
-                onClick={(ev) => {
-                  ev.stopPropagation();
-                  ev.preventDefault();
-                  setSelectedSectionIdx(idx);
-                }}
-                className={css({ cursor: "pointer" })}
-              >
-                <rect
-                  x={x1}
-                  y={2}
-                  width={Math.max(2, x2 - x1)}
-                  height={SECTION_BAND_HEIGHT_PX}
-                  rx={2}
-                  fill={isSelected ? "var(--colors-indigo-4)" : "var(--colors-indigo-3)"}
-                  stroke="var(--colors-indigo-7)"
-                  strokeWidth={1}
-                />
+        {systems.map((sys, idx) => {
+          const sectionForThisRow =
+            selectedSectionIdx !== null
+              ? sliced[idx].sysSections.find((s) => s.sectionIdx === selectedSectionIdx)
+              : undefined;
+          return (
+            <TabSystemRow
+              key={`sys-${sys.startSec.toFixed(3)}-${sys.endSec.toFixed(3)}`}
+              system={sys}
+              layout={layout}
+              heightPx={height}
+              beats={beats}
+              notes={sliced[idx].sysNotes}
+              groups={sliced[idx].sysGroups}
+              sections={sliced[idx].sysSections}
+              selectedNote={selectedNoteSystemIdx === idx ? selectedNote : null}
+              selectedSection={
+                sectionForThisRow && sectionForThisRow.startsHere
+                  ? sectionForThisRow.fullSection
+                  : null
+              }
+              selectedSectionIdx={selectedSectionIdx}
+              addTarget={addTarget && addTarget.systemIdx === idx ? addTarget : null}
+              onEdit={onEdit}
+              onClosePopover={closePopover}
+              onCloseAdd={closeAdd}
+              onCloseSection={closeSection}
+              onAddNote={(string, fret) => {
+                if (!addTarget) return;
+                const pitch = DEFAULT_TUNING[string] + fret;
+                const id = tabNoteId({ startSec: addTarget.startSec, pitch });
+                onEdit({
+                  kind: "add",
+                  id,
+                  pitch,
+                  startSec: addTarget.startSec,
+                  durSec: localBeatDuration(addTarget.startSec, beats.beats),
+                  velocity: 1,
+                  string,
+                  fret,
+                });
+                closeAdd();
+              }}
+              onDeleteSection={() => {
+                if (selectedSectionIdx === null) return;
+                onRemoveSectionAt(selectedSectionIdx);
+                closeSection();
+              }}
+              onPickNote={setSelectedId}
+              onPickSection={setSelectedSectionIdx}
+              onClickStaff={(e) => handleStaffClick(e, idx)}
+              registerSystemEl={(el) => {
+                if (el) systemElsRef.current.set(idx, el);
+                else systemElsRef.current.delete(idx);
+              }}
+              registerPlayhead={(el) => {
+                if (el) playheadRefs.current.set(idx, el);
+                else playheadRefs.current.delete(idx);
+              }}
+            />
+          );
+        })}
+      </Box>
+    </Box>
+  );
+}
+
+interface TabSystemRowProps {
+  system: PlannedSystem;
+  layout: typeof DEFAULT_LAYOUT;
+  heightPx: number;
+  beats: BeatsPayload;
+  notes: TabNote[];
+  groups: { indices: number[]; beamLevels: number }[];
+  sections: {
+    sectionIdx: number;
+    name: string;
+    repeats?: number;
+    startSec: number;
+    endSec: number;
+    fullSection: SectionLabel;
+    startsHere: boolean;
+  }[];
+  selectedNote: TabNote | null;
+  selectedSection: SectionLabel | null;
+  selectedSectionIdx: number | null;
+  addTarget: AddNoteTarget | null;
+  onEdit: (op: EditOp) => void;
+  onClosePopover: () => void;
+  onCloseAdd: () => void;
+  onCloseSection: () => void;
+  onAddNote: (string: number, fret: number) => void;
+  onDeleteSection: () => void;
+  onPickNote: (id: NoteId) => void;
+  onPickSection: (idx: number) => void;
+  onClickStaff: (e: React.MouseEvent<SVGElement>) => void;
+  registerSystemEl: (el: HTMLDivElement | null) => void;
+  registerPlayhead: (el: SVGLineElement | null) => void;
+}
+
+function TabSystemRow({
+  system,
+  layout,
+  heightPx,
+  beats,
+  notes,
+  groups,
+  sections,
+  selectedNote,
+  selectedSection,
+  selectedSectionIdx,
+  addTarget,
+  onEdit,
+  onClosePopover,
+  onCloseAdd,
+  onCloseSection,
+  onAddNote,
+  onDeleteSection,
+  onPickNote,
+  onPickSection,
+  onClickStaff,
+  registerSystemEl,
+  registerPlayhead,
+}: TabSystemRowProps) {
+  // Local bar list for this row (positions relative to system.startSec).
+  const localBars = useMemo(() => {
+    const out: { localX: number; barNumber: number }[] = [];
+    const allBars = barLineTimes(beats.beats, layout.beatsPerBar);
+    for (let i = 0; i < allBars.length; i++) {
+      const t = allBars[i];
+      if (t >= system.startSec && t < system.endSec) {
+        out.push({
+          localX: rowTimeToX(system, t),
+          barNumber: i + 1,
+        });
+      }
+    }
+    return out;
+  }, [beats.beats, layout, system]);
+
+  const stemTop = stringIndexToY(0, layout) + 2;
+  const stemBottom = stringIndexToY(0, layout) + STEM_LENGTH_PX;
+
+  return (
+    <Box ref={registerSystemEl} position="relative" width={`${system.widthPx}px`} flexShrink="0">
+      {/* oxlint-disable-next-line jsx-a11y/click-events-have-key-events */}
+      <svg
+        width={system.widthPx}
+        height={heightPx}
+        role="application"
+        aria-label="bass tab editor row"
+        onClick={onClickStaff}
+        className={css({ display: "block", fontFamily: "inherit" })}
+      >
+        {/* Section bands clipped to this row */}
+        {sections.map((s) => {
+          const x1 = rowTimeToX(system, s.startSec);
+          const x2 = rowTimeToX(system, s.endSec);
+          const isSelected = selectedSectionIdx === s.sectionIdx;
+          const showLabel = s.startsHere;
+          const labelText = s.repeats && s.repeats > 1 ? `${s.name} ×${s.repeats}` : s.name;
+          return (
+            <g
+              key={`sec-${s.sectionIdx}-${x1.toFixed(2)}`}
+              onClick={(ev) => {
+                ev.stopPropagation();
+                ev.preventDefault();
+                onPickSection(s.sectionIdx);
+              }}
+              className={css({ cursor: "pointer" })}
+            >
+              <rect
+                x={x1}
+                y={2}
+                width={Math.max(2, x2 - x1)}
+                height={SECTION_BAND_HEIGHT_PX}
+                rx={2}
+                fill={isSelected ? "var(--colors-indigo-4)" : "var(--colors-indigo-3)"}
+                stroke="var(--colors-indigo-7)"
+                strokeWidth={1}
+              />
+              {showLabel && (
                 <text
                   x={x1 + 5}
                   y={SECTION_BAND_HEIGHT_PX - 3}
@@ -309,225 +540,192 @@ function TabSurface({
                 >
                   {labelText}
                 </text>
-              </g>
-            );
-          })}
+              )}
+            </g>
+          );
+        })}
 
-          {/* String lines */}
-          {STRING_LABELS.map((label, i) => {
-            const y = stringIndexToY(i, layout);
-            return (
-              <line
-                key={`str-${label}`}
-                x1={0}
-                x2={width}
-                y1={y}
-                y2={y}
-                stroke="var(--colors-border)"
-                strokeWidth={1}
-              />
-            );
-          })}
+        {/* String lines */}
+        {STRING_LABELS.map((label, i) => {
+          const y = stringIndexToY(i, layout);
+          return (
+            <line
+              key={`str-${label}`}
+              x1={0}
+              x2={system.widthPx}
+              y1={y}
+              y2={y}
+              stroke="var(--colors-border)"
+              strokeWidth={1}
+            />
+          );
+        })}
 
-          {/* String labels in the left margin */}
-          {STRING_LABELS.map((label, i) => (
+        {/* String labels in the left margin */}
+        {STRING_LABELS.map((label, i) => (
+          <text
+            key={`label-${label}`}
+            x={4}
+            y={stringIndexToY(i, layout) + 4}
+            fontSize="11"
+            fill="var(--colors-fg-muted)"
+          >
+            {label}
+          </text>
+        ))}
+
+        {/* Bar lines + bar numbers */}
+        {localBars.map((b) => (
+          <g key={`bar-${b.barNumber}`}>
+            <line
+              x1={b.localX}
+              x2={b.localX}
+              y1={layout.topPadding - 4}
+              y2={layout.topPadding + (layout.stringCount - 1) * layout.stringLineSpacing + 4}
+              stroke="var(--colors-border)"
+              strokeWidth={b.barNumber === 1 ? 2 : 1}
+            />
             <text
-              key={`label-${label}`}
-              x={4}
-              y={stringIndexToY(i, layout) + 4}
-              fontSize="11"
+              x={b.localX + 3}
+              y={layout.topPadding - 8}
+              fontSize="10"
               fill="var(--colors-fg-muted)"
+              style={{ fontVariantNumeric: "tabular-nums" }}
             >
-              {label}
+              {b.barNumber}
             </text>
-          ))}
+          </g>
+        ))}
 
-          {/* Bar lines + bar numbers */}
-          {bars.map((t, idx) => {
-            const x = timeToX(t, layout);
-            return (
-              <g key={`bar-${t.toFixed(4)}`}>
+        {/* Fret numbers — click to edit */}
+        {notes.map((n) => {
+          const x = rowTimeToX(system, n.startSec);
+          const y = stringIndexToY(n.string, layout);
+          const glyph = rhythmGlyph(classifyNote(n, beats.beats));
+          const id = tabNoteId(n);
+          const isSelected = selectedNote ? id === tabNoteId(selectedNote) : false;
+          return (
+            <g
+              key={id}
+              onClick={(ev) => {
+                ev.stopPropagation();
+                onPickNote(id);
+              }}
+              className={css({ cursor: "pointer" })}
+            >
+              <rect
+                x={x - 7}
+                y={y - 8}
+                width={14}
+                height={16}
+                rx={3}
+                fill={isSelected ? "var(--colors-indigo-3)" : "var(--colors-canvas)"}
+              />
+              <text
+                x={x}
+                y={y + 4}
+                fontSize="12"
+                textAnchor="middle"
+                fontWeight="600"
+                fill="var(--colors-indigo-11)"
+                style={{ fontVariantNumeric: "tabular-nums" }}
+              >
+                {n.fret}
+              </text>
+              {glyph.dotted && (
+                <circle cx={x + 8} cy={y + 1} r={1.4} fill="var(--colors-indigo-11)" />
+              )}
+            </g>
+          );
+        })}
+
+        {/* Rhythm: stems + beams (groups of ≥ 2) or flags (singletons) */}
+        {groups.map((g) => {
+          if (g.beamLevels === 0) return null;
+          const xs = g.indices.map((i) => rowTimeToX(system, notes[i].startSec));
+          const key = `beam-${xs[0].toFixed(2)}-${xs.length}-${g.beamLevels}`;
+          return (
+            <g key={key} stroke="var(--colors-fg-muted)" fill="none">
+              {xs.map((x) => (
                 <line
+                  key={`stem-${x.toFixed(3)}`}
                   x1={x}
                   x2={x}
-                  y1={layout.topPadding - 4}
-                  y2={layout.topPadding + (layout.stringCount - 1) * layout.stringLineSpacing + 4}
-                  stroke="var(--colors-border)"
-                  strokeWidth={idx === 0 ? 2 : 1}
+                  y1={stemTop}
+                  y2={stemBottom}
+                  strokeWidth={1}
                 />
-                <text
-                  x={x + 3}
-                  y={layout.topPadding - 8}
-                  fontSize="10"
-                  fill="var(--colors-fg-muted)"
-                  style={{ fontVariantNumeric: "tabular-nums" }}
-                >
-                  {idx + 1}
-                </text>
-              </g>
-            );
-          })}
+              ))}
+              {xs.length >= 2
+                ? Array.from({ length: g.beamLevels }, (_, b) => {
+                    const by = stemBottom - b * FLAG_GAP_PX;
+                    return (
+                      <line
+                        key={`beam-line-${by}`}
+                        x1={xs[0]}
+                        x2={xs[xs.length - 1]}
+                        y1={by}
+                        y2={by}
+                        strokeWidth={1.6}
+                      />
+                    );
+                  })
+                : Array.from({ length: g.beamLevels }, (_, b) => {
+                    const fy = stemBottom - b * FLAG_GAP_PX;
+                    return (
+                      <line
+                        key={`flag-${fy}`}
+                        x1={xs[0]}
+                        x2={xs[0] + FLAG_LENGTH_PX}
+                        y1={fy}
+                        y2={fy}
+                        strokeWidth={1.4}
+                      />
+                    );
+                  })}
+            </g>
+          );
+        })}
 
-          {/* Fret numbers — click to edit */}
-          {tabNotes.map((n) => {
-            const x = timeToX(n.startSec, layout);
-            const y = stringIndexToY(n.string, layout);
-            const glyph = rhythmGlyph(classifyNote(n, beats.beats));
-            const id = tabNoteId(n);
-            const isSelected = id === selectedId;
-            return (
-              <g
-                key={id}
-                onClick={(ev) => {
-                  ev.stopPropagation();
-                  setSelectedId(id);
-                }}
-                className={css({ cursor: "pointer" })}
-              >
-                {/* tiny background so the fret number is readable on the line */}
-                <rect
-                  x={x - 7}
-                  y={y - 8}
-                  width={14}
-                  height={16}
-                  rx={3}
-                  fill={isSelected ? "var(--colors-indigo-3)" : "var(--colors-canvas)"}
-                />
-                <text
-                  x={x}
-                  y={y + 4}
-                  fontSize="12"
-                  textAnchor="middle"
-                  fontWeight="600"
-                  fill="var(--colors-indigo-11)"
-                  style={{ fontVariantNumeric: "tabular-nums" }}
-                >
-                  {n.fret}
-                </text>
-                {glyph.dotted && (
-                  <circle cx={x + 8} cy={y + 1} r={1.4} fill="var(--colors-indigo-11)" />
-                )}
-              </g>
-            );
-          })}
+        {/* Playhead — hidden until the rAF loop puts it on this row. */}
+        <line
+          ref={registerPlayhead}
+          x1={-10}
+          x2={-10}
+          y1={layout.topPadding - 8}
+          y2={layout.topPadding + (layout.stringCount - 1) * layout.stringLineSpacing + 8}
+          stroke="var(--colors-indigo-9)"
+          strokeWidth={2}
+        />
+      </svg>
 
-          {/* Rhythm: stems + beams (groups of ≥ 2) or flags (singletons) */}
-          {groups.map((g) => {
-            if (g.beamLevels === 0) return null;
-            const stemTop = stringIndexToY(0, layout) + 2;
-            const stemBottom = stringIndexToY(0, layout) + STEM_LENGTH_PX;
-            const xs = g.indices.map((i) => timeToX(tabNotes[i].startSec, layout));
-            const key = `beam-${xs[0].toFixed(2)}-${xs.length}-${g.beamLevels}`;
-            return (
-              <g key={key} stroke="var(--colors-fg-muted)" fill="none">
-                {xs.map((x) => (
-                  <line
-                    key={`stem-${x.toFixed(3)}`}
-                    x1={x}
-                    x2={x}
-                    y1={stemTop}
-                    y2={stemBottom}
-                    strokeWidth={1}
-                  />
-                ))}
-                {xs.length >= 2
-                  ? // Beam: one horizontal bar per beam level, stacked.
-                    Array.from({ length: g.beamLevels }, (_, b) => {
-                      const by = stemBottom - b * FLAG_GAP_PX;
-                      return (
-                        <line
-                          key={`beam-line-${by}`}
-                          x1={xs[0]}
-                          x2={xs[xs.length - 1]}
-                          y1={by}
-                          y2={by}
-                          strokeWidth={1.6}
-                        />
-                      );
-                    })
-                  : // Singleton short note: short flag pointing right.
-                    Array.from({ length: g.beamLevels }, (_, b) => {
-                      const fy = stemBottom - b * FLAG_GAP_PX;
-                      return (
-                        <line
-                          key={`flag-${fy}`}
-                          x1={xs[0]}
-                          x2={xs[0] + FLAG_LENGTH_PX}
-                          y1={fy}
-                          y2={fy}
-                          strokeWidth={1.4}
-                        />
-                      );
-                    })}
-              </g>
-            );
-          })}
+      {selectedNote && (
+        <NoteEditPopover
+          note={selectedNote}
+          anchorX={rowTimeToX(system, selectedNote.startSec)}
+          anchorY={stringIndexToY(selectedNote.string, layout)}
+          onEdit={onEdit}
+          onClose={onClosePopover}
+        />
+      )}
 
-          {/* Playhead */}
-          <line
-            ref={playheadRef}
-            x1={0}
-            x2={0}
-            y1={layout.topPadding - 8}
-            y2={layout.topPadding + (layout.stringCount - 1) * layout.stringLineSpacing + 8}
-            stroke="var(--colors-indigo-9)"
-            strokeWidth={2}
-          />
-        </svg>
+      {addTarget && <AddNotePopover target={addTarget} onAdd={onAddNote} onClose={onCloseAdd} />}
 
-        {selectedNote && (
-          <NoteEditPopover
-            note={selectedNote}
-            anchorX={timeToX(selectedNote.startSec, layout)}
-            anchorY={stringIndexToY(selectedNote.string, layout)}
-            onEdit={onEdit}
-            onClose={closePopover}
-          />
-        )}
-
-        {addTarget && (
-          <AddNotePopover
-            target={addTarget}
-            durationSec={localBeatDuration(addTarget.startSec, beats.beats)}
-            onAdd={(string, fret) => {
-              const pitch = DEFAULT_TUNING[string] + fret;
-              const id = tabNoteId({ startSec: addTarget.startSec, pitch });
-              onEdit({
-                kind: "add",
-                id,
-                pitch,
-                startSec: addTarget.startSec,
-                durSec: localBeatDuration(addTarget.startSec, beats.beats),
-                velocity: 1,
-                string,
-                fret,
-              });
-              closeAdd();
-            }}
-            onClose={closeAdd}
-          />
-        )}
-
-        {selectedSectionIdx !== null && sections[selectedSectionIdx] && (
-          <SectionDeletePopover
-            section={sections[selectedSectionIdx]}
-            anchorX={timeToX(sections[selectedSectionIdx].startSec, layout)}
-            anchorY={2}
-            onDelete={() => {
-              onRemoveSectionAt(selectedSectionIdx);
-              closeSection();
-            }}
-            onClose={closeSection}
-          />
-        )}
-      </Box>
+      {selectedSection && selectedSectionIdx !== null && (
+        <SectionDeletePopover
+          section={selectedSection}
+          anchorX={rowTimeToX(system, selectedSection.startSec)}
+          anchorY={2}
+          onDelete={onDeleteSection}
+          onClose={onCloseSection}
+        />
+      )}
     </Box>
   );
 }
 
 interface AddNotePopoverProps {
   target: AddNoteTarget;
-  durationSec: number;
   onAdd: (string: number, fret: number) => void;
   onClose: () => void;
 }

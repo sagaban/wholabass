@@ -394,7 +394,13 @@ export function Player({ songId }: PlayerProps) {
             )}
           </Slider.Root>
 
-          <HStack gap="2" alignItems="center" justifyContent="space-between" flexWrap="wrap">
+          <HStack
+            gap="2"
+            alignItems="center"
+            justifyContent="space-between"
+            flexWrap="wrap"
+            mt={markA !== null || markB !== null ? "3" : "0"}
+          >
             <HStack gap="2" alignItems="center">
               <Button size="xs" variant={markA !== null ? "solid" : "outline"} onClick={onSetA}>
                 Set A
