@@ -40,6 +40,12 @@ interface TabProps {
   durationSec: number;
   edits: EditsFile;
   onEdit: (op: EditOp) => void;
+  /**
+   * Wraps a series of `onEdit` calls into a single undo step. Used by
+   * drag-commit, multi-delete, paste, and bar-duplicate so a single
+   * Cmd+Z reverses the whole gesture.
+   */
+  transact: (fn: () => void) => void;
   onRemoveSectionAt: (index: number) => void;
 }
 
@@ -57,6 +63,7 @@ export function Tab({
   durationSec,
   edits,
   onEdit,
+  transact,
   onRemoveSectionAt,
 }: TabProps) {
   const [optimizerNotes, setOptimizerNotes] = useState<TabNote[]>([]);
@@ -122,6 +129,7 @@ export function Tab({
       durationSec={durationSec}
       sections={edits.sections}
       onEdit={onEdit}
+      transact={transact}
       onRemoveSectionAt={onRemoveSectionAt}
     />
   );
@@ -134,6 +142,7 @@ interface TabSurfaceProps {
   durationSec: number;
   sections: readonly SectionLabel[];
   onEdit: (op: EditOp) => void;
+  transact: (fn: () => void) => void;
   onRemoveSectionAt: (index: number) => void;
 }
 
@@ -186,6 +195,7 @@ function TabSurface({
   durationSec,
   sections,
   onEdit,
+  transact,
   onRemoveSectionAt,
 }: TabSurfaceProps) {
   const layout = DEFAULT_LAYOUT;
@@ -335,36 +345,38 @@ function TabSurface({
       const inBar = tabNotes.filter((n) => n.startSec >= barStart && n.startSec < barEnd);
       const after = tabNotes.filter((n) => n.startSec >= barEnd);
 
-      // Shift later notes by one bar so the inserted copy fits.
-      for (const n of after) {
-        onEdit({ kind: "delete", id: tabNoteId(n) });
-        onEdit({
-          kind: "add",
-          id: tabNoteId({ startSec: n.startSec + barDur, pitch: n.pitch }),
-          pitch: n.pitch,
-          startSec: n.startSec + barDur,
-          durSec: n.durSec,
-          velocity: n.velocity,
-          string: n.string,
-          fret: n.fret,
-        });
-      }
-      // Duplicate in-bar notes one bar later.
-      for (const n of inBar) {
-        const newStart = n.startSec + barDur;
-        onEdit({
-          kind: "add",
-          id: tabNoteId({ startSec: newStart, pitch: n.pitch }),
-          pitch: n.pitch,
-          startSec: newStart,
-          durSec: n.durSec,
-          velocity: n.velocity,
-          string: n.string,
-          fret: n.fret,
-        });
-      }
+      transact(() => {
+        // Shift later notes by one bar so the inserted copy fits.
+        for (const n of after) {
+          onEdit({ kind: "delete", id: tabNoteId(n) });
+          onEdit({
+            kind: "add",
+            id: tabNoteId({ startSec: n.startSec + barDur, pitch: n.pitch }),
+            pitch: n.pitch,
+            startSec: n.startSec + barDur,
+            durSec: n.durSec,
+            velocity: n.velocity,
+            string: n.string,
+            fret: n.fret,
+          });
+        }
+        // Duplicate in-bar notes one bar later.
+        for (const n of inBar) {
+          const newStart = n.startSec + barDur;
+          onEdit({
+            kind: "add",
+            id: tabNoteId({ startSec: newStart, pitch: n.pitch }),
+            pitch: n.pitch,
+            startSec: newStart,
+            durSec: n.durSec,
+            velocity: n.velocity,
+            string: n.string,
+            fret: n.fret,
+          });
+        }
+      });
     },
-    [bars, durationSec, tabNotes, onEdit],
+    [bars, durationSec, tabNotes, onEdit, transact],
   );
 
   const handleStaffContextMenu = useCallback(
@@ -502,21 +514,23 @@ function TabSurface({
         // cancels — better than producing a fret-26 ghost.
         if (newFret < 0 || newFret > 24) return;
 
-        if (!sameTime) {
-          onEdit({ kind: "delete", id: drag.id });
-          onEdit({
-            kind: "add",
-            id: tabNoteId({ startSec: target.startSec, pitch: drag.pitch }),
-            pitch: drag.pitch,
-            startSec: target.startSec,
-            durSec: drag.durSec,
-            velocity: drag.velocity,
-            string: target.string,
-            fret: newFret,
-          });
-        } else {
-          onEdit({ kind: "replace", id: drag.id, string: target.string, fret: newFret });
-        }
+        transact(() => {
+          if (!sameTime) {
+            onEdit({ kind: "delete", id: drag.id });
+            onEdit({
+              kind: "add",
+              id: tabNoteId({ startSec: target.startSec, pitch: drag.pitch }),
+              pitch: drag.pitch,
+              startSec: target.startSec,
+              durSec: drag.durSec,
+              velocity: drag.velocity,
+              string: target.string,
+              fret: newFret,
+            });
+          } else {
+            onEdit({ kind: "replace", id: drag.id, string: target.string, fret: newFret });
+          }
+        });
         // Selection becomes stale (id changed) — reset to the new note.
         setSelection(new Set());
         lastClickedRef.current = null;
@@ -525,7 +539,7 @@ function TabSurface({
       window.addEventListener("mousemove", onMove);
       window.addEventListener("mouseup", onUp);
     },
-    [findDropTarget, onEdit, rangeSelect],
+    [findDropTarget, onEdit, rangeSelect, transact],
   );
 
   const handleStaffClick = useCallback(
@@ -577,7 +591,9 @@ function TabSurface({
         return;
       }
       if ((e.key === "Backspace" || e.key === "Delete") && selection.size > 0) {
-        for (const id of selection) onEdit({ kind: "delete", id });
+        transact(() => {
+          for (const id of selection) onEdit({ kind: "delete", id });
+        });
         setSelection(new Set());
         setSelectedId(null);
         e.preventDefault();
@@ -600,26 +616,28 @@ function TabSurface({
       }
       if (meta && e.key.toLowerCase() === "v" && clipboardRef.current.length > 0) {
         const t0 = engine.getCurrentTime();
-        for (const c of clipboardRef.current) {
-          const start = t0 + c.relStartSec;
-          onEdit({
-            kind: "add",
-            id: tabNoteId({ startSec: start, pitch: c.pitch }),
-            pitch: c.pitch,
-            startSec: start,
-            durSec: c.durSec,
-            velocity: c.velocity,
-            string: c.string,
-            fret: c.fret,
-          });
-        }
+        transact(() => {
+          for (const c of clipboardRef.current) {
+            const start = t0 + c.relStartSec;
+            onEdit({
+              kind: "add",
+              id: tabNoteId({ startSec: start, pitch: c.pitch }),
+              pitch: c.pitch,
+              startSec: start,
+              durSec: c.durSec,
+              velocity: c.velocity,
+              string: c.string,
+              fret: c.fret,
+            });
+          }
+        });
         e.preventDefault();
         return;
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [selection, tabNotes, onEdit, engine]);
+  }, [selection, tabNotes, onEdit, engine, transact]);
 
   // rAF: place playhead in the active system, scroll that row into view
   // when it changes (or when the user is mid-playback and seeks).

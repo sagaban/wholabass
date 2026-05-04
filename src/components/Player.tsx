@@ -95,8 +95,20 @@ export function Player({ songId }: PlayerProps) {
   // Edits overlay (Phase 3). Lives at the Player level so the section
   // dialog has access to the A-B markers; Tab consumes it via props and
   // never writes to disk on its own.
-  const [edits, setEdits] = useState<EditsFile>(EMPTY_EDITS);
+  const [edits, setEditsState] = useState<EditsFile>(EMPTY_EDITS);
+  const editsRef = useRef<EditsFile>(EMPTY_EDITS);
   const editsDirtyRef = useRef(false);
+  // Undo / redo history. Snapshots are pushed BEFORE each mutation;
+  // a transaction (drag, paste, bar-duplicate) batches multiple ops
+  // into a single history entry. Capped so a long session can't grow
+  // the heap unbounded.
+  const HISTORY_CAP = 50;
+  const historyRef = useRef<{ past: EditsFile[]; future: EditsFile[] }>({ past: [], future: [] });
+  const inTransactionRef = useRef(false);
+  const transactionStartRef = useRef<EditsFile | null>(null);
+  // Tick state forces a re-render after undo/redo so callers reading
+  // editsRef-derived state see fresh values. Not displayed directly.
+  const [, setHistoryTick] = useState(0);
   const [sectionDialogOpen, setSectionDialogOpen] = useState(false);
   // Section playback countdown — number of remaining loop fires before
   // we clear the engine loop. -1 means "no section is driving the loop"
@@ -105,16 +117,101 @@ export function Player({ songId }: PlayerProps) {
   // Bumped after the user replaces bass.mid via upload, so Tab reloads.
   const [tabSourceRev, setTabSourceRev] = useState(0);
 
-  const onEdit = useCallback((op: EditOp) => {
-    editsDirtyRef.current = true;
-    setEdits((prev) => ({ ...prev, notes: upsertEdit(prev.notes, op) }));
+  const pushHistory = useCallback((snapshot: EditsFile) => {
+    const h = historyRef.current;
+    h.past.push(snapshot);
+    if (h.past.length > HISTORY_CAP) h.past.shift();
+    h.future = [];
+    setHistoryTick((t) => t + 1);
   }, []);
+
+  /**
+   * Apply a functional edit to the EditsFile. Outside a transaction,
+   * pushes the prior state to the undo stack. Inside a transaction,
+   * the snapshot recorded by `transact` is pushed once at the end.
+   */
+  const mutateEdits = useCallback(
+    (mutator: (prev: EditsFile) => EditsFile) => {
+      const prev = editsRef.current;
+      const next = mutator(prev);
+      if (next === prev) return;
+      if (!inTransactionRef.current) {
+        pushHistory(prev);
+      }
+      editsRef.current = next;
+      editsDirtyRef.current = true;
+      setEditsState(next);
+    },
+    [pushHistory],
+  );
+
+  /** Run `fn` (which may call `mutateEdits` zero or more times) as a single undo step. */
+  const transact = useCallback(
+    (fn: () => void) => {
+      if (inTransactionRef.current) {
+        // Nested transact: just run; the outer one owns the history push.
+        fn();
+        return;
+      }
+      transactionStartRef.current = editsRef.current;
+      inTransactionRef.current = true;
+      try {
+        fn();
+      } finally {
+        inTransactionRef.current = false;
+      }
+      const start = transactionStartRef.current;
+      transactionStartRef.current = null;
+      if (start && start !== editsRef.current) {
+        pushHistory(start);
+      }
+    },
+    [pushHistory],
+  );
+
+  /** Replace edits without touching history (used on song load). */
+  const replaceEditsNoHistory = useCallback((next: EditsFile) => {
+    editsRef.current = next;
+    historyRef.current = { past: [], future: [] };
+    setHistoryTick((t) => t + 1);
+    setEditsState(next);
+  }, []);
+
+  const undo = useCallback(() => {
+    const h = historyRef.current;
+    if (h.past.length === 0) return;
+    const previous = h.past.pop() as EditsFile;
+    h.future.push(editsRef.current);
+    if (h.future.length > HISTORY_CAP) h.future.shift();
+    editsRef.current = previous;
+    editsDirtyRef.current = true;
+    setEditsState(previous);
+    setHistoryTick((t) => t + 1);
+  }, []);
+
+  const redo = useCallback(() => {
+    const h = historyRef.current;
+    if (h.future.length === 0) return;
+    const next = h.future.pop() as EditsFile;
+    h.past.push(editsRef.current);
+    if (h.past.length > HISTORY_CAP) h.past.shift();
+    editsRef.current = next;
+    editsDirtyRef.current = true;
+    setEditsState(next);
+    setHistoryTick((t) => t + 1);
+  }, []);
+
+  const onEdit = useCallback(
+    (op: EditOp) => {
+      mutateEdits((prev) => ({ ...prev, notes: upsertEdit(prev.notes, op) }));
+    },
+    [mutateEdits],
+  );
 
   const onAddSection = useCallback(
     (name: string, repeats?: number) => {
       if (markA === null || markB === null || markB <= markA) return;
-      editsDirtyRef.current = true;
-      setEdits((prev) => ({
+      mutateEdits((prev) => ({
         ...prev,
         sections: addSection(prev.sections, {
           startSec: markA,
@@ -124,18 +221,22 @@ export function Player({ songId }: PlayerProps) {
         }),
       }));
     },
-    [markA, markB],
+    [markA, markB, mutateEdits],
   );
 
-  const onRemoveSectionAt = useCallback((index: number) => {
-    editsDirtyRef.current = true;
-    setEdits((prev) => ({ ...prev, sections: removeSectionAt(prev.sections, index) }));
-  }, []);
+  const onRemoveSectionAt = useCallback(
+    (index: number) => {
+      mutateEdits((prev) => ({ ...prev, sections: removeSectionAt(prev.sections, index) }));
+    },
+    [mutateEdits],
+  );
 
-  const onSetMidiOffset = useCallback((offsetSec: number) => {
-    editsDirtyRef.current = true;
-    setEdits((prev) => ({ ...prev, midiOffsetSec: offsetSec }));
-  }, []);
+  const onSetMidiOffset = useCallback(
+    (offsetSec: number) => {
+      mutateEdits((prev) => ({ ...prev, midiOffsetSec: offsetSec }));
+    },
+    [mutateEdits],
+  );
 
   const onAlignMidiToPlayhead = useCallback(() => {
     const engine = engineRef.current;
@@ -143,25 +244,30 @@ export function Player({ songId }: PlayerProps) {
     onSetMidiOffset(engine.getCurrentTime());
   }, [onSetMidiOffset]);
 
-  const onSetMidiSpeed = useCallback((speed: number) => {
-    const clamped = Math.max(0.1, Math.min(5, speed));
-    editsDirtyRef.current = true;
-    setEdits((prev) => ({ ...prev, midiSpeed: clamped }));
-  }, []);
+  const onSetMidiSpeed = useCallback(
+    (speed: number) => {
+      const clamped = Math.max(0.1, Math.min(5, speed));
+      mutateEdits((prev) => ({ ...prev, midiSpeed: clamped }));
+    },
+    [mutateEdits],
+  );
 
-  const onSetSectionRepeats = useCallback((index: number, repeats: number) => {
-    editsDirtyRef.current = true;
-    setEdits((prev) => ({
-      ...prev,
-      // Store undefined for repeats=1 to keep the on-disk shape minimal
-      // (matches the convention used at create time).
-      sections: updateSectionAt(prev.sections, index, {
-        repeats: repeats > 1 ? repeats : undefined,
-      }),
-    }));
-  }, []);
+  const onSetSectionRepeats = useCallback(
+    (index: number, repeats: number) => {
+      mutateEdits((prev) => ({
+        ...prev,
+        // Store undefined for repeats=1 to keep the on-disk shape minimal
+        // (matches the convention used at create time).
+        sections: updateSectionAt(prev.sections, index, {
+          repeats: repeats > 1 ? repeats : undefined,
+        }),
+      }));
+    },
+    [mutateEdits],
+  );
 
-  // Load + autosave the edits overlay alongside stems.
+  // Load + autosave the edits overlay alongside stems. Loads bypass
+  // the history (a song change isn't an undoable action).
   useEffect(() => {
     let cancelled = false;
     editsDirtyRef.current = false;
@@ -169,15 +275,15 @@ export function Player({ songId }: PlayerProps) {
       try {
         const raw = await invoke<unknown>("read_edits", { songId });
         if (cancelled) return;
-        setEdits(normalizeEditsFile(raw));
+        replaceEditsNoHistory(normalizeEditsFile(raw));
       } catch {
-        if (!cancelled) setEdits(EMPTY_EDITS);
+        if (!cancelled) replaceEditsNoHistory(EMPTY_EDITS);
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [songId]);
+  }, [songId, replaceEditsNoHistory]);
 
   useEffect(() => {
     if (!editsDirtyRef.current) return;
@@ -186,6 +292,30 @@ export function Player({ songId }: PlayerProps) {
     }, 500);
     return () => clearTimeout(timer);
   }, [edits, songId]);
+
+  // Cmd+Z / Cmd+Shift+Z (or Ctrl on non-Mac) undo / redo. Skip when
+  // typing in a text field so the section dialog still works normally.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (t) {
+        const tag = t.tagName;
+        if (tag === "INPUT" || tag === "TEXTAREA" || t.isContentEditable) return;
+      }
+      const meta = e.metaKey || e.ctrlKey;
+      if (!meta) return;
+      const key = e.key.toLowerCase();
+      if (key === "z" && !e.shiftKey) {
+        undo();
+        e.preventDefault();
+      } else if ((key === "z" && e.shiftKey) || key === "y") {
+        redo();
+        e.preventDefault();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [undo, redo]);
 
   // Load stems whenever songId changes.
   useEffect(() => {
@@ -578,6 +708,7 @@ export function Player({ songId }: PlayerProps) {
             durationSec={duration}
             edits={edits}
             onEdit={onEdit}
+            transact={transact}
             onRemoveSectionAt={onRemoveSectionAt}
           />
         )}
