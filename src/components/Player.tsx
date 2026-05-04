@@ -24,9 +24,11 @@ import {
   EMPTY_EDITS,
   addSection,
   removeSectionAt,
+  updateSectionAt,
   upsertEdit,
   type EditOp,
   type EditsFile,
+  type SectionLabel,
 } from "@/tab/edits";
 
 type LoadStatus = { kind: "loading" } | { kind: "ready" } | { kind: "error"; message: string };
@@ -69,6 +71,10 @@ export function Player({ songId }: PlayerProps) {
   const [edits, setEdits] = useState<EditsFile>(EMPTY_EDITS);
   const editsDirtyRef = useRef(false);
   const [sectionDialogOpen, setSectionDialogOpen] = useState(false);
+  // Section playback countdown — number of remaining loop fires before
+  // we clear the engine loop. -1 means "no section is driving the loop"
+  // (the user is using A-B as a free-form scratch loop).
+  const sectionLoopsLeftRef = useRef(-1);
 
   const onEdit = useCallback((op: EditOp) => {
     editsDirtyRef.current = true;
@@ -95,6 +101,18 @@ export function Player({ songId }: PlayerProps) {
   const onRemoveSectionAt = useCallback((index: number) => {
     editsDirtyRef.current = true;
     setEdits((prev) => ({ ...prev, sections: removeSectionAt(prev.sections, index) }));
+  }, []);
+
+  const onSetSectionRepeats = useCallback((index: number, repeats: number) => {
+    editsDirtyRef.current = true;
+    setEdits((prev) => ({
+      ...prev,
+      // Store undefined for repeats=1 to keep the on-disk shape minimal
+      // (matches the convention used at create time).
+      sections: updateSectionAt(prev.sections, index, {
+        repeats: repeats > 1 ? repeats : undefined,
+      }),
+    }));
   }, []);
 
   // Load + autosave the edits overlay alongside stems.
@@ -188,6 +206,18 @@ export function Player({ songId }: PlayerProps) {
         // crosses B; on the next read we pick up the looped position.
         if (engine.tickLoop()) {
           synthRef.current?.schedule(engine.getCurrentTime(), engine.getTempo());
+          // Section-driven playback: count loop fires and clear the
+          // loop when the configured repeat count is exhausted, so the
+          // song continues past B instead of looping forever.
+          if (sectionLoopsLeftRef.current > 0) {
+            sectionLoopsLeftRef.current -= 1;
+            if (sectionLoopsLeftRef.current === 0) {
+              engine.clearLoop();
+              setMarkA(null);
+              setMarkB(null);
+              sectionLoopsLeftRef.current = -1;
+            }
+          }
         }
         const t = engine.getCurrentTime();
         setPosition(t);
@@ -242,6 +272,7 @@ export function Player({ songId }: PlayerProps) {
   const onSetA = () => {
     const engine = engineRef.current;
     if (!engine) return;
+    sectionLoopsLeftRef.current = -1;
     const a = engine.getCurrentTime();
     setMarkA(a);
     // Activate the loop only if B is present and ahead of A.
@@ -255,6 +286,7 @@ export function Player({ songId }: PlayerProps) {
   const onSetB = () => {
     const engine = engineRef.current;
     if (!engine) return;
+    sectionLoopsLeftRef.current = -1;
     const b = engine.getCurrentTime();
     setMarkB(b);
     if (markA !== null && b > markA) {
@@ -266,9 +298,41 @@ export function Player({ songId }: PlayerProps) {
 
   const onClearLoop = () => {
     engineRef.current?.clearLoop();
+    sectionLoopsLeftRef.current = -1;
     setMarkA(null);
     setMarkB(null);
   };
+
+  const onPlaySection = useCallback(
+    (idx: number) => {
+      const engine = engineRef.current;
+      const ctx = ctxRef.current;
+      if (!engine || !engine.hasBuffers) return;
+      const section = edits.sections[idx];
+      if (!section) return;
+      void ctx?.resume();
+      const repeats = section.repeats ?? 1;
+      engine.seek(section.startSec);
+      setMarkA(section.startSec);
+      setMarkB(section.endSec);
+      if (repeats > 1) {
+        engine.setLoop({ a: section.startSec, b: section.endSec });
+        sectionLoopsLeftRef.current = repeats - 1;
+      } else {
+        engine.clearLoop();
+        sectionLoopsLeftRef.current = -1;
+      }
+      if (!engine.isPlaying) {
+        engine.play();
+        synthRef.current?.schedule(engine.getCurrentTime(), engine.getTempo());
+        setIsPlaying(true);
+      } else {
+        synthRef.current?.schedule(engine.getCurrentTime(), engine.getTempo());
+      }
+      setPosition(engine.getCurrentTime());
+    },
+    [edits.sections],
+  );
 
   if (load.kind === "loading") {
     return (
@@ -397,6 +461,13 @@ export function Player({ songId }: PlayerProps) {
             </styled.span>
           </HStack>
 
+          <SectionsList
+            sections={edits.sections}
+            onPlay={onPlaySection}
+            onRemoveAt={onRemoveSectionAt}
+            onSetRepeats={onSetSectionRepeats}
+          />
+
           {engineRef.current && synthRef.current && (
             <StemMixer engine={engineRef.current} synth={synthRef.current} />
           )}
@@ -488,6 +559,127 @@ function fmtTime(seconds: number): string {
   const m = Math.floor(seconds / 60);
   const s = Math.floor(seconds % 60);
   return `${m}:${s.toString().padStart(2, "0")}`;
+}
+
+interface SectionsListProps {
+  sections: readonly SectionLabel[];
+  onPlay: (idx: number) => void;
+  onRemoveAt: (idx: number) => void;
+  onSetRepeats: (idx: number, repeats: number) => void;
+}
+
+function SectionsList({ sections, onPlay, onRemoveAt, onSetRepeats }: SectionsListProps) {
+  return (
+    <Box
+      p="3"
+      borderWidth="1px"
+      borderColor="border"
+      borderRadius="l3"
+      display="flex"
+      flexDirection="column"
+      gap="2"
+    >
+      <styled.div fontSize="sm" fontWeight="semibold">
+        Sections
+      </styled.div>
+      {sections.length === 0 ? (
+        <styled.span fontSize="xs" opacity="0.6">
+          set A-B and click "Name section" to add one
+        </styled.span>
+      ) : (
+        sections.map((s, idx) => (
+          <HStack
+            key={`${s.startSec.toFixed(3)}-${s.endSec.toFixed(3)}-${s.name}`}
+            gap="2"
+            alignItems="center"
+            justifyContent="space-between"
+          >
+            <styled.span fontSize="sm" flex="1" minWidth="0">
+              {s.name}
+              <styled.span fontSize="xs" opacity="0.5" ml="2" fontVariantNumeric="tabular-nums">
+                {fmtTime(s.startSec)}–{fmtTime(s.endSec)}
+              </styled.span>
+            </styled.span>
+            <RepeatsInput
+              value={s.repeats ?? 1}
+              onChange={(v) => onSetRepeats(idx, v)}
+              ariaLabel={`repeats for ${s.name}`}
+            />
+            <HStack gap="1">
+              <Button
+                size="xs"
+                variant="outline"
+                onClick={() => onPlay(idx)}
+                aria-label={`play ${s.name}`}
+              >
+                ▶
+              </Button>
+              <Button
+                size="xs"
+                variant="outline"
+                colorPalette="red"
+                onClick={() => onRemoveAt(idx)}
+                aria-label={`delete ${s.name}`}
+              >
+                ✕
+              </Button>
+            </HStack>
+          </HStack>
+        ))
+      )}
+    </Box>
+  );
+}
+
+interface RepeatsInputProps {
+  value: number;
+  onChange: (next: number) => void;
+  ariaLabel: string;
+}
+
+function RepeatsInput({ value, onChange, ariaLabel }: RepeatsInputProps) {
+  // Mirror the value into a string so the user can briefly clear the
+  // field while typing without us snapping it back to "1" on every key.
+  const [text, setText] = useState(String(value));
+  useEffect(() => {
+    setText(String(value));
+  }, [value]);
+
+  const commit = (raw: string) => {
+    const n = Number.parseInt(raw, 10);
+    const next = Number.isFinite(n) && n > 0 ? n : 1;
+    setText(String(next));
+    if (next !== value) onChange(next);
+  };
+
+  return (
+    <HStack gap="1" alignItems="center">
+      <styled.span fontSize="xs" opacity="0.6">
+        ×
+      </styled.span>
+      <styled.input
+        type="number"
+        min="1"
+        value={text}
+        onChange={(e) => setText(e.currentTarget.value)}
+        onBlur={(e) => commit(e.currentTarget.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") commit(e.currentTarget.value);
+        }}
+        aria-label={ariaLabel}
+        width="42px"
+        px="1"
+        py="0"
+        borderWidth="1px"
+        borderColor="border"
+        borderRadius="l1"
+        bg="canvas"
+        fontSize="xs"
+        fontVariantNumeric="tabular-nums"
+        textAlign="right"
+      />
+    </HStack>
+  );
 }
 
 interface SectionDialogProps {

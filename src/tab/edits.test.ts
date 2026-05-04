@@ -6,6 +6,7 @@ import {
   noteId,
   removeSectionAt,
   tabNoteId,
+  updateSectionAt,
   upsertEdit,
   type EditOp,
   type EditsFile,
@@ -180,5 +181,19 @@ describe("addSection / removeSectionAt", () => {
   test("removeSectionAt is a no-op for out-of-range indices", () => {
     expect(removeSectionAt([a], -1)).toEqual([a]);
     expect(removeSectionAt([a], 99)).toEqual([a]);
+  });
+
+  test("updateSectionAt patches one field, preserves order", () => {
+    const out = updateSectionAt([b, a, c], 1, { repeats: 4 });
+    expect(out.map((s) => s.name)).toEqual(["Intro", "Verse", "Chorus"]);
+    expect(out[1].repeats).toBe(4);
+    // Untouched.
+    expect(out[0]).toEqual(b);
+    expect(out[2]).toEqual(c);
+  });
+
+  test("updateSectionAt is a no-op for out-of-range indices", () => {
+    expect(updateSectionAt([a], -1, { name: "x" })).toEqual([a]);
+    expect(updateSectionAt([a], 99, { name: "x" })).toEqual([a]);
   });
 });

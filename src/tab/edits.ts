@@ -54,6 +54,18 @@ export function removeSectionAt(sections: readonly SectionLabel[], index: number
   return out;
 }
 
+/** Patch one field of an existing section without disturbing the order. */
+export function updateSectionAt(
+  sections: readonly SectionLabel[],
+  index: number,
+  patch: Partial<SectionLabel>,
+): SectionLabel[] {
+  if (index < 0 || index >= sections.length) return sections.slice();
+  const out = sections.slice();
+  out[index] = { ...out[index], ...patch };
+  return out;
+}
+
 export interface EditsFile {
   version: number;
   notes: EditOp[];
