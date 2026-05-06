@@ -103,6 +103,30 @@ def handle_beats(params: JsonObject) -> JsonObject:
     return track_beats(song_id=song_id, source_path=source_path, out_dir=out_dir)
 
 
+def handle_bass_first_onset(params: JsonObject) -> JsonObject:
+    from pipeline.onset import bass_first_onset
+
+    song_id = _require_str(params, "song_id")
+    bass_path = Path(_require_str(params, "bass_path"))
+    return bass_first_onset(song_id=song_id, bass_path=bass_path)
+
+
+def handle_bass_onsets(params: JsonObject) -> JsonObject:
+    from pipeline.onset import bass_onsets
+
+    song_id = _require_str(params, "song_id")
+    bass_path = Path(_require_str(params, "bass_path"))
+    return bass_onsets(song_id=song_id, bass_path=bass_path)
+
+
+def handle_drum_onsets(params: JsonObject) -> JsonObject:
+    from pipeline.onset import drum_onsets
+
+    song_id = _require_str(params, "song_id")
+    drums_path = Path(_require_str(params, "drums_path"))
+    return drum_onsets(song_id=song_id, drums_path=drums_path)
+
+
 def _require_str(params: JsonObject, key: str) -> str:
     value = params.get(key)
     if not isinstance(value, str) or not value:
@@ -123,6 +147,9 @@ HANDLERS: dict[str, Handler] = {
     "download": handle_download,
     "transcribe": handle_transcribe,
     "beats": handle_beats,
+    "bass_first_onset": handle_bass_first_onset,
+    "bass_onsets": handle_bass_onsets,
+    "drum_onsets": handle_drum_onsets,
     "models": handle_models,
 }
 

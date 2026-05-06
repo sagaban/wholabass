@@ -1,6 +1,11 @@
 import { describe, expect, test } from "vitest";
 import { Midi } from "@tonejs/midi";
-import { describeMidiTracks, extractTrackToMidi, suggestBassTrack } from "./midi";
+import {
+  describeMidiTracks,
+  extractTrackToMidi,
+  findBestAlignment,
+  suggestBassTrack,
+} from "./midi";
 
 function buildMidi(
   tracks: {
@@ -162,5 +167,36 @@ describe("extractTrackToMidi", () => {
     const buf = buildMidi([{ name: "X", notes: [{ midi: 40, time: 0, duration: 1 }] }]);
     expect(() => extractTrackToMidi(buf, 5)).toThrow(/out of range/);
     expect(() => extractTrackToMidi(buf, -1)).toThrow(/out of range/);
+  });
+});
+
+describe("findBestAlignment", () => {
+  test("recovers a known offset (speed=1, offset=2.0s)", () => {
+    // MIDI onsets every 0.5s starting at 0; audio onsets shifted by +2.0s.
+    const midi = [0, 0.5, 1, 1.5, 2, 2.5, 3];
+    const audio = midi.map((t) => t + 2.0);
+    const out = findBestAlignment(audio, midi, 1.0);
+    expect(out).not.toBeNull();
+    expect(out!.speed).toBeCloseTo(1.0, 1);
+    // Offset is within the coarse-grid step (50 ms), which is well
+    // inside the matching tolerance — the test only checks that we
+    // landed in the right neighbourhood.
+    expect(Math.abs(out!.offset - 2.0)).toBeLessThanOrEqual(0.06);
+    // All midi onsets should match.
+    expect(out!.matches).toBe(midi.length);
+  });
+
+  test("recovers a small speed deviation", () => {
+    // Audio is 5% faster than MIDI: audio[t] = midi[t] / 1.05.
+    const midi = Array.from({ length: 20 }, (_, i) => i * 0.5);
+    const audio = midi.map((t) => t / 1.05);
+    const out = findBestAlignment(audio, midi, 1.0, { offsetMin: -0.5, offsetMax: 0.5 });
+    expect(out).not.toBeNull();
+    expect(out!.speed).toBeCloseTo(1.05, 1);
+  });
+
+  test("returns null on empty input", () => {
+    expect(findBestAlignment([], [1, 2, 3], 1)).toBeNull();
+    expect(findBestAlignment([1, 2, 3], [], 1)).toBeNull();
   });
 });

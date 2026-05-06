@@ -605,34 +605,55 @@ function TabSurface({
 
         const target = findDropTarget(ev.clientX, ev.clientY);
         if (!target) return;
-        const sameTime = Math.abs(target.startSec - drag.startSec) < 1e-6;
-        const sameString = target.string === drag.string;
-        if (sameTime && sameString) return;
+        const dSec = target.startSec - drag.startSec;
+        const dString = target.string - drag.string;
+        if (Math.abs(dSec) < 1e-6 && dString === 0) return;
 
-        const newFret = drag.pitch - DEFAULT_TUNING[target.string];
-        // Drop only lands if the same pitch is reachable on the new
-        // string within a 24-fret neck. Otherwise the drag silently
-        // cancels — better than producing a fret-26 ghost.
-        if (newFret < 0 || newFret > 24) return;
+        // Group drag: if the dragged note is part of the current
+        // multi-selection, move the whole selection by the same delta;
+        // otherwise drag only this note. We snapshot the selected
+        // TabNotes upfront so the loop sees consistent input.
+        const groupNotes =
+          selection.has(drag.id) && selection.size > 1
+            ? tabNotes.filter((n) => selection.has(tabNoteId(n)))
+            : [
+                {
+                  pitch: drag.pitch,
+                  startSec: drag.startSec,
+                  durSec: drag.durSec,
+                  velocity: drag.velocity,
+                  string: drag.string,
+                  fret: drag.pitch - DEFAULT_TUNING[drag.string],
+                } as TabNote,
+              ];
 
         transact(() => {
-          if (!sameTime) {
-            onEdit({ kind: "delete", id: drag.id });
-            onEdit({
-              kind: "add",
-              id: tabNoteId({ startSec: target.startSec, pitch: drag.pitch }),
-              pitch: drag.pitch,
-              startSec: target.startSec,
-              durSec: drag.durSec,
-              velocity: drag.velocity,
-              string: target.string,
-              fret: newFret,
-            });
-          } else {
-            onEdit({ kind: "replace", id: drag.id, string: target.string, fret: newFret });
+          for (const n of groupNotes) {
+            const newString = Math.max(0, Math.min(DEFAULT_TUNING.length - 1, n.string + dString));
+            const newFret = n.pitch - DEFAULT_TUNING[newString];
+            if (newFret < 0 || newFret > 24) continue;
+            const newStartSec = Math.max(0, n.startSec + dSec);
+            const oldId = tabNoteId(n);
+            const startChanged = Math.abs(dSec) > 1e-6;
+            if (startChanged) {
+              onEdit({ kind: "delete", id: oldId });
+              onEdit({
+                kind: "add",
+                id: tabNoteId({ startSec: newStartSec, pitch: n.pitch }),
+                pitch: n.pitch,
+                startSec: newStartSec,
+                durSec: n.durSec,
+                velocity: n.velocity,
+                string: newString,
+                fret: newFret,
+              });
+            } else {
+              onEdit({ kind: "replace", id: oldId, string: newString, fret: newFret });
+            }
           }
         });
-        // Selection becomes stale (id changed) — reset to the new note.
+        // Selection ids may be stale (startSec changed) — clear so the
+        // user makes a fresh selection on the new positions.
         setSelection(new Set());
         lastClickedRef.current = null;
         setSelectedId(null);
@@ -640,7 +661,7 @@ function TabSurface({
       window.addEventListener("mousemove", onMove);
       window.addEventListener("mouseup", onUp);
     },
-    [findDropTarget, onEdit, rangeSelect, transact],
+    [findDropTarget, onEdit, rangeSelect, selection, tabNotes, transact],
   );
 
   const openAddNoteAt = useCallback(
@@ -871,6 +892,7 @@ function TabSurface({
         flexDirection="column"
         gap="1"
         p="2"
+        userSelect="none"
       >
         {systems.map((sys, idx) => {
           const sectionForThisRow =
@@ -1029,14 +1051,20 @@ function ContextMenu({
     >
       <Box
         position="absolute"
-        bg="bg.default"
+        backdropFilter="blur(12px)"
         borderWidth="1px"
         borderColor="border"
         borderRadius="l1"
-        boxShadow="md"
+        boxShadow="lg"
         py="1"
-        minWidth="180px"
-        style={{ left: `${x}px`, top: `${y}px` }}
+        minWidth="200px"
+        style={{
+          left: `${x}px`,
+          top: `${y}px`,
+          // Solid-ish dark backing so the staff underneath doesn't bleed
+          // through; the backdropFilter above adds a frosted-glass blur.
+          backgroundColor: "rgba(15, 15, 22, 0.88)",
+        }}
         onClick={(e) => e.stopPropagation()}
       >
         {items.map((it) => (
@@ -1271,13 +1299,27 @@ function TabSystemRow({
               onMouseDown={(ev) => onNoteMouseDown(ev, n)}
               className={css({ cursor: "grab" })}
             >
+              {/* Invisible hit target — generous so clicks slightly off
+                  the fret number still grab the note for drag/select.
+                  fill is "transparent" (still painted, so SVG hit-tests
+                  it under the default visiblePainted rule). */}
+              <rect
+                x={x - 11}
+                y={y - 10}
+                width={22}
+                height={20}
+                fill="transparent"
+                style={{ pointerEvents: "all" }}
+              />
               <rect
                 x={x - 7}
                 y={y - 8}
                 width={14}
                 height={16}
                 rx={3}
-                fill={isSelected ? "var(--colors-indigo-3)" : "var(--colors-canvas)"}
+                fill={isSelected ? "var(--colors-tomato-9)" : "var(--colors-canvas)"}
+                stroke={isSelected ? "var(--colors-tomato-11)" : "none"}
+                strokeWidth={isSelected ? 1 : 0}
               />
               <text
                 x={x}
@@ -1285,7 +1327,7 @@ function TabSystemRow({
                 fontSize="12"
                 textAnchor="middle"
                 fontWeight="600"
-                fill="var(--colors-indigo-11)"
+                fill={isSelected ? "var(--colors-tomato-1)" : "var(--colors-indigo-11)"}
                 style={{ fontVariantNumeric: "tabular-nums" }}
               >
                 {n.fret}

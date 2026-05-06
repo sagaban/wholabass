@@ -18,7 +18,10 @@ import {
 import {
   describeMidiTracks,
   extractTrackToMidi,
+  findBestAlignment,
   loadBassNotes,
+  readMidiAlignmentMetadata,
+  readMidiOnsets,
   suggestBassTrack,
   type BassNote,
   type MidiTrackInfo,
@@ -252,6 +255,89 @@ export function Player({ songId }: PlayerProps) {
     [mutateEdits],
   );
 
+  /**
+   * Auto-match heuristic. Reads the song's beats.json for the
+   * audio-side tempo + first downbeat, and bass.mid for the MIDI's
+   * native tempo + earliest note. Sets both speed (audio/midi BPM)
+   * and offset (audio first beat aligned to first MIDI note) as a
+   * single undo step. Returns a one-line summary or null on failure.
+   */
+  const onAutoMatchMidi = useCallback(async (): Promise<string | null> => {
+    try {
+      const beats = await invoke<{ tempo_bpm: number; beats: number[] }>("read_beats", {
+        songId,
+      });
+      if (!beats.beats.length) return null;
+      const bytes = await invoke<ArrayBuffer>("read_midi", { songId });
+      const meta = readMidiAlignmentMetadata(bytes);
+      if (!meta) return null;
+
+      // Compute a folded base speed from BPM ratios. Used as the anchor
+      // for the cross-correlation sweep — that way half-/double-time
+      // mismatches from either side are handled before DSP work starts.
+      const rawSpeed =
+        meta.tempoBpm > 0 ? Math.max(0.1, Math.min(5, beats.tempo_bpm / meta.tempoBpm)) : 1;
+      let baseSpeed = rawSpeed;
+      while (baseSpeed < 0.7) baseSpeed *= 2;
+      while (baseSpeed > 1.6) baseSpeed /= 2;
+
+      // Pull audio onsets + MIDI onsets, then cross-correlate.
+      // Drums give a much cleaner pulse than the bass stem (kick + snare
+      // hit on most beats; bass can rest, slide, or ornament). Prefer
+      // drums; fall back to bass if the drum stem is missing or silent.
+      // Limited to the first ~25 s so mid-song tempo drift /
+      // missing-note ornamentation doesn't skew the fit.
+      let audioOnsets: number[] = [];
+      let audioSource: "drums" | "bass" | "none" = "none";
+      try {
+        audioOnsets = await invoke<number[]>("drum_onsets", { songId });
+        if (audioOnsets.length > 0) audioSource = "drums";
+      } catch {
+        audioOnsets = [];
+      }
+      if (audioOnsets.length === 0) {
+        try {
+          audioOnsets = await invoke<number[]>("bass_onsets", { songId });
+          if (audioOnsets.length > 0) audioSource = "bass";
+        } catch {
+          audioOnsets = [];
+        }
+      }
+      const midiOnsets = readMidiOnsets(bytes);
+
+      let speed = baseSpeed;
+      let offset = (beats.beats[0] ?? 0) - meta.firstNoteSec / baseSpeed;
+      let matches = 0;
+      let totalMidiOnsets = midiOnsets.length;
+      let usedCorrelation = false;
+
+      if (audioOnsets.length > 0 && midiOnsets.length > 0) {
+        const result = findBestAlignment(audioOnsets, midiOnsets, baseSpeed, {
+          prefixSec: 25,
+        });
+        if (result) {
+          speed = result.speed;
+          offset = result.offset;
+          matches = result.matches;
+          totalMidiOnsets = result.totalMidiOnsets;
+          usedCorrelation = true;
+        }
+      }
+
+      transact(() => {
+        mutateEdits((prev) => ({ ...prev, midiSpeed: speed, midiOffsetSec: offset }));
+      });
+
+      const summary = `audio ${beats.tempo_bpm.toFixed(1)} bpm / midi ${meta.tempoBpm.toFixed(
+        1,
+      )} bpm → ${(speed * 100).toFixed(2)}%, offset ${offset.toFixed(2)}s`;
+      if (!usedCorrelation) return `${summary} (BPM ratio only — no audio onsets)`;
+      return `${summary} (matched ${matches}/${totalMidiOnsets} MIDI onsets to ${audioSource} pulse, first 25 s)`;
+    } catch {
+      return null;
+    }
+  }, [songId, transact, mutateEdits]);
+
   const onSetSectionRepeats = useCallback(
     (index: number, repeats: number) => {
       mutateEdits((prev) => ({
@@ -432,7 +518,7 @@ export function Player({ songId }: PlayerProps) {
     return () => cancelAnimationFrame(raf);
   }, [isPlaying]);
 
-  const onTogglePlay = () => {
+  const onTogglePlay = useCallback(() => {
     const engine = engineRef.current;
     if (!engine || !engine.hasBuffers) return;
     void ctxRef.current?.resume();
@@ -446,7 +532,25 @@ export function Player({ songId }: PlayerProps) {
       synthRef.current?.schedule(engine.getCurrentTime(), engine.getTempo());
       setIsPlaying(true);
     }
-  };
+  }, []);
+
+  // Spacebar = play/pause when no text field has focus.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.code !== "Space" && e.key !== " ") return;
+      const t = e.target as HTMLElement | null;
+      if (t) {
+        const tag = t.tagName;
+        if (tag === "INPUT" || tag === "TEXTAREA" || tag === "BUTTON" || t.isContentEditable) {
+          return;
+        }
+      }
+      e.preventDefault();
+      onTogglePlay();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onTogglePlay]);
 
   const onSeek = (value: number) => {
     const engine = engineRef.current;
@@ -674,7 +778,16 @@ export function Player({ songId }: PlayerProps) {
             onSetOffset={onSetMidiOffset}
             onAlignToPlayhead={onAlignMidiToPlayhead}
             onSetSpeed={onSetMidiSpeed}
-            onReplaced={() => setTabSourceRev((r) => r + 1)}
+            onAutoMatch={onAutoMatchMidi}
+            onReplaced={() => {
+              // Clear any note-level edits — they were keyed to the
+              // previous bass.mid's note ids and would otherwise sit
+              // on top of the new optimizer output as phantom extras.
+              // Wrapped so a single Cmd+Z brings them back if the user
+              // wanted to preserve them.
+              mutateEdits((prev) => (prev.notes.length === 0 ? prev : { ...prev, notes: [] }));
+              setTabSourceRev((r) => r + 1);
+            }}
           />
 
           <SectionsList
@@ -786,6 +899,7 @@ interface TabSourceCardProps {
   onSetOffset: (sec: number) => void;
   onAlignToPlayhead: () => void;
   onSetSpeed: (speed: number) => void;
+  onAutoMatch: () => Promise<string | null>;
   onReplaced: () => void;
 }
 
@@ -796,6 +910,7 @@ function TabSourceCard({
   onSetOffset,
   onAlignToPlayhead,
   onSetSpeed,
+  onAutoMatch,
   onReplaced,
 }: TabSourceCardProps) {
   const inputRef = useRef<HTMLInputElement | null>(null);
@@ -932,6 +1047,7 @@ function TabSourceCard({
         onAlignToPlayhead={onAlignToPlayhead}
       />
       <SpeedControls speed={speed} onSetSpeed={onSetSpeed} />
+      <AutoMatchRow onAutoMatch={onAutoMatch} />
 
       <TrackPickerDialog
         open={pendingPick !== null}
@@ -1027,6 +1143,48 @@ function OffsetControls({ offsetSec, onSetOffset, onAlignToPlayhead }: OffsetCon
   );
 }
 
+interface AutoMatchRowProps {
+  onAutoMatch: () => Promise<string | null>;
+}
+
+function AutoMatchRow({ onAutoMatch }: AutoMatchRowProps) {
+  const [status, setStatus] = useState<
+    { kind: "idle" } | { kind: "running" } | { kind: "ok"; msg: string } | { kind: "error" }
+  >({ kind: "idle" });
+
+  const run = async () => {
+    setStatus({ kind: "running" });
+    const msg = await onAutoMatch();
+    setStatus(msg ? { kind: "ok", msg } : { kind: "error" });
+  };
+
+  return (
+    <HStack gap="2" alignItems="center" flexWrap="wrap">
+      <styled.span fontSize="xs" opacity="0.7" minWidth="56px">
+        Auto
+      </styled.span>
+      <Button size="xs" variant="outline" onClick={run} disabled={status.kind === "running"}>
+        Auto-match to audio
+      </Button>
+      {status.kind === "running" && (
+        <styled.span fontSize="xs" opacity="0.6">
+          measuring…
+        </styled.span>
+      )}
+      {status.kind === "ok" && (
+        <styled.span fontSize="xs" opacity="0.7" fontVariantNumeric="tabular-nums">
+          {status.msg}
+        </styled.span>
+      )}
+      {status.kind === "error" && (
+        <styled.span fontSize="xs" color="error">
+          could not match — adjust manually
+        </styled.span>
+      )}
+    </HStack>
+  );
+}
+
 interface SpeedControlsProps {
   speed: number;
   onSetSpeed: (speed: number) => void;
@@ -1035,15 +1193,15 @@ interface SpeedControlsProps {
 function SpeedControls({ speed, onSetSpeed }: SpeedControlsProps) {
   // Display + edit as percent (100 = native) — easier on the ear than
   // raw multipliers — but we round to 2 decimal places under the hood.
-  const [text, setText] = useState((speed * 100).toFixed(1));
+  const [text, setText] = useState((speed * 100).toFixed(2));
   useEffect(() => {
-    setText((speed * 100).toFixed(1));
+    setText((speed * 100).toFixed(2));
   }, [speed]);
 
   const commit = (raw: string) => {
     const n = Number.parseFloat(raw);
     const next = Number.isFinite(n) && n > 0 ? n / 100 : 1;
-    setText((next * 100).toFixed(1));
+    setText((next * 100).toFixed(2));
     if (Math.abs(next - speed) > 1e-6) onSetSpeed(next);
   };
 
@@ -1062,7 +1220,7 @@ function SpeedControls({ speed, onSetSpeed }: SpeedControlsProps) {
       </Button>
       <styled.input
         type="number"
-        step="0.1"
+        step="0.01"
         value={text}
         onChange={(e) => setText(e.currentTarget.value)}
         onBlur={(e) => commit(e.currentTarget.value)}
@@ -1070,7 +1228,7 @@ function SpeedControls({ speed, onSetSpeed }: SpeedControlsProps) {
           if (e.key === "Enter") commit(e.currentTarget.value);
         }}
         aria-label="midi speed percent"
-        width="72px"
+        width="84px"
         px="1"
         py="0"
         borderWidth="1px"

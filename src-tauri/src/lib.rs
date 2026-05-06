@@ -461,6 +461,101 @@ async fn replace_bass_midi(
         .map_err(|e| format!("write {}: {e}", path.display()))
 }
 
+/// Detect when the bass stem first plays. Used by the auto-match
+/// flow to align an uploaded MIDI to the audio. Returns null when
+/// the stem is missing / silent so the frontend can fall back to a
+/// cruder anchor (e.g. beats[0]).
+#[tauri::command]
+async fn bass_first_onset(
+    song_id: String,
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<Option<f64>, String> {
+    let library_root = library::resolve_root(&app).map_err(|e| e.to_string())?;
+    let bass_path = library::stem_path(&library_root, &song_id, "bass")
+        .map_err(|e| e.to_string())?;
+    if !bass_path.is_file() {
+        return Err(format!("bass stem missing for {song_id}"));
+    }
+    let sc = take_sidecar(&state).await?;
+    let resp = sc
+        .call(
+            "bass_first_onset",
+            serde_json::json!({
+                "song_id": song_id,
+                "bass_path": bass_path.to_string_lossy(),
+            }),
+        )
+        .await
+        .map_err(|e| format!("bass_first_onset: {e}"))?;
+    Ok(resp.get("onset_sec").and_then(|v| v.as_f64()))
+}
+
+/// Drum-stem onsets — the song's pulse. Cleaner than bass for
+/// alignment because drums have predictable, dense, transient hits.
+#[tauri::command]
+async fn drum_onsets(
+    song_id: String,
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<Vec<f64>, String> {
+    let library_root = library::resolve_root(&app).map_err(|e| e.to_string())?;
+    let drums_path =
+        library::stem_path(&library_root, &song_id, "drums").map_err(|e| e.to_string())?;
+    if !drums_path.is_file() {
+        return Err(format!("drum stem missing for {song_id}"));
+    }
+    let sc = take_sidecar(&state).await?;
+    let resp = sc
+        .call(
+            "drum_onsets",
+            serde_json::json!({
+                "song_id": song_id,
+                "drums_path": drums_path.to_string_lossy(),
+            }),
+        )
+        .await
+        .map_err(|e| format!("drum_onsets: {e}"))?;
+    let arr = resp
+        .get("onsets_sec")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| "drum_onsets: missing onsets_sec".to_string())?;
+    Ok(arr.iter().filter_map(|v| v.as_f64()).collect())
+}
+
+/// Every detected onset in the bass stem. Used by the v3 auto-match
+/// flow which cross-correlates audio onsets with MIDI onsets.
+#[tauri::command]
+async fn bass_onsets(
+    song_id: String,
+    state: State<'_, AppState>,
+    app: AppHandle,
+) -> Result<Vec<f64>, String> {
+    let library_root = library::resolve_root(&app).map_err(|e| e.to_string())?;
+    let bass_path =
+        library::stem_path(&library_root, &song_id, "bass").map_err(|e| e.to_string())?;
+    if !bass_path.is_file() {
+        return Err(format!("bass stem missing for {song_id}"));
+    }
+    let sc = take_sidecar(&state).await?;
+    let resp = sc
+        .call(
+            "bass_onsets",
+            serde_json::json!({
+                "song_id": song_id,
+                "bass_path": bass_path.to_string_lossy(),
+            }),
+        )
+        .await
+        .map_err(|e| format!("bass_onsets: {e}"))?;
+    let arr = resp
+        .get("onsets_sec")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| "bass_onsets: missing onsets_sec".to_string())?;
+    let out: Vec<f64> = arr.iter().filter_map(|v| v.as_f64()).collect();
+    Ok(out)
+}
+
 #[tauri::command]
 async fn read_beats(song_id: String, app: AppHandle) -> Result<Value, String> {
     let library_root = library::resolve_root(&app).map_err(|e| e.to_string())?;
@@ -589,6 +684,9 @@ pub fn run() {
             replace_bass_midi,
             transcribe_song,
             read_beats,
+            bass_first_onset,
+            bass_onsets,
+            drum_onsets,
             read_edits,
             write_edits,
             models_status

@@ -2,6 +2,7 @@ import { indigo } from "@/theme/colors/indigo";
 import { green } from "@/theme/colors/green";
 import { red } from "@/theme/colors/red";
 import { slate } from "@/theme/colors/slate";
+import { tomato } from "@/theme/colors/tomato";
 import { animationStyles } from "@/theme/animation-styles";
 import { zIndex } from "@/theme/tokens/z-index";
 import { shadows } from "@/theme/tokens/shadows";
@@ -91,6 +92,7 @@ export default defineConfig({
           red: red,
           green: green,
           indigo: indigo,
+          tomato: tomato,
         },
 
         shadows: shadows,
