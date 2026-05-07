@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { SoundTouchNode } from "@soundtouchjs/audio-worklet";
 // Vite ?url returns the URL of the worklet processor file so it can be
 // loaded into the AudioContext via audioWorklet.addModule(). The package
@@ -946,15 +947,45 @@ function TabSourceCard({
   const [status, setStatus] = useState<
     | { kind: "idle" }
     | { kind: "uploading" }
-    | { kind: "transcribing" }
+    | { kind: "transcribing"; progress: number; stage: string }
     | { kind: "ok" }
     | { kind: "error"; message: string }
   >({ kind: "idle" });
+  const [collapsed, setCollapsed] = useState(false);
   const [pendingPick, setPendingPick] = useState<{
     buffer: ArrayBuffer;
     tracks: MidiTrackInfo[];
     suggested: number;
   } | null>(null);
+
+  // Subscribe to sidecar progress while a transcription is running. The
+  // shared `ingest:progress` channel is also used by library-level
+  // ingests, but only one long-running sidecar call exists at a time, so
+  // every event during transcription belongs to this card's call.
+  const transcribing = status.kind === "transcribing";
+  useEffect(() => {
+    if (!transcribing) return;
+    let unlisten: (() => void) | undefined;
+    let mounted = true;
+    void listen<{ progress: number; stage: string }>("ingest:progress", (event) => {
+      setStatus((prev) =>
+        prev.kind === "transcribing"
+          ? {
+              kind: "transcribing",
+              progress: event.payload.progress,
+              stage: event.payload.stage,
+            }
+          : prev,
+      );
+    }).then((fn) => {
+      if (!mounted) fn();
+      else unlisten = fn;
+    });
+    return () => {
+      mounted = false;
+      unlisten?.();
+    };
+  }, [transcribing]);
 
   const commitBytes = async (bytes: Uint8Array) => {
     setStatus({ kind: "uploading" });
@@ -999,7 +1030,7 @@ function TabSourceCard({
   // so the dropdown can offer the cross-product without a 2D picker.
   const [transcribeChoice, setTranscribeChoice] = useState<string>("basic_pitch:balanced");
   const onTranscribe = async () => {
-    setStatus({ kind: "transcribing" });
+    setStatus({ kind: "transcribing", progress: 0, stage: "starting" });
     try {
       const [engine, preset] = transcribeChoice.split(":");
       await invoke("transcribe_song", { songId, engine, preset });
@@ -1022,88 +1053,127 @@ function TabSourceCard({
       flexDirection="column"
       gap="2"
     >
-      <styled.div fontSize="sm" fontWeight="semibold">
-        Tab source
-      </styled.div>
-      <styled.span fontSize="xs" opacity="0.6">
-        Auto-transcribe the isolated bass with basic-pitch, or upload your own MIDI (e.g., a Guitar
-        Pro export saved as .mid).
-      </styled.span>
-      <HStack gap="2" alignItems="center" flexWrap="wrap">
-        <Button size="xs" variant="outline" onClick={onTranscribe} disabled={busy}>
-          Auto-transcribe
-        </Button>
-        <styled.select
-          value={transcribeChoice}
-          onChange={(e) => setTranscribeChoice(e.currentTarget.value)}
-          disabled={busy}
-          aria-label="transcription model + preset"
-          fontSize="xs"
-          px="1"
-          py="0.5"
-          borderWidth="1px"
-          borderColor="border"
-          borderRadius="l1"
-          bg="canvas"
+      <HStack justifyContent="space-between" alignItems="center">
+        <styled.button
+          type="button"
+          onClick={() => setCollapsed((v) => !v)}
+          aria-expanded={!collapsed}
+          aria-label={collapsed ? "expand tab source" : "collapse tab source"}
+          display="flex"
+          alignItems="center"
+          gap="1"
+          bg="transparent"
+          border="0"
+          p="0"
+          cursor="pointer"
+          fontSize="sm"
+          fontWeight="semibold"
+          color="inherit"
         >
-          <optgroup label="basic-pitch (Spotify)">
-            <option value="basic_pitch:balanced">balanced</option>
-            <option value="basic_pitch:sensitive">sensitive (busy lines)</option>
-            <option value="basic_pitch:monophonic">monophonic (sustained)</option>
-          </optgroup>
-          <optgroup label="CREPE (monophonic)">
-            <option value="crepe:balanced">balanced</option>
-            <option value="crepe:sensitive">sensitive</option>
-          </optgroup>
-        </styled.select>
-        <Button
-          size="xs"
-          variant="outline"
-          onClick={() => inputRef.current?.click()}
-          disabled={busy}
-        >
-          Upload .mid…
-        </Button>
-        <styled.input
-          ref={inputRef}
-          type="file"
-          accept=".mid,.midi,audio/midi"
-          display="none"
-          onChange={(e) => {
-            const f = e.currentTarget.files?.[0];
-            if (f) void onFile(f);
-            e.currentTarget.value = "";
-          }}
-        />
-        {status.kind === "uploading" && (
-          <styled.span fontSize="xs" opacity="0.6">
+          <styled.span
+            display="inline-block"
+            width="3"
+            textAlign="center"
+            opacity="0.7"
+            fontSize="xs"
+          >
+            {collapsed ? "▸" : "▾"}
+          </styled.span>
+          Tab source
+        </styled.button>
+        {collapsed && status.kind === "transcribing" && (
+          <styled.span fontSize="xs" opacity="0.7" fontVariantNumeric="tabular-nums">
+            transcribing… {Math.round(status.progress)}%
+          </styled.span>
+        )}
+        {collapsed && status.kind === "uploading" && (
+          <styled.span fontSize="xs" opacity="0.7">
             uploading…
           </styled.span>
         )}
-        {status.kind === "transcribing" && (
-          <styled.span fontSize="xs" opacity="0.6">
-            transcribing… (basic-pitch on bass stem)
-          </styled.span>
-        )}
-        {status.kind === "ok" && (
-          <styled.span fontSize="xs" color="indigo.11">
-            updated ✓
-          </styled.span>
-        )}
-        {status.kind === "error" && (
-          <styled.span fontSize="xs" color="error">
-            {status.message}
-          </styled.span>
-        )}
       </HStack>
+      {!collapsed && (
+        <>
+          <styled.span fontSize="xs" opacity="0.6">
+            Auto-transcribe the isolated bass with basic-pitch, or upload your own MIDI (e.g., a
+            Guitar Pro export saved as .mid).
+          </styled.span>
+          <HStack gap="2" alignItems="center" flexWrap="wrap">
+            <Button size="xs" variant="outline" onClick={onTranscribe} disabled={busy}>
+              Auto-transcribe
+            </Button>
+            <styled.select
+              value={transcribeChoice}
+              onChange={(e) => setTranscribeChoice(e.currentTarget.value)}
+              disabled={busy}
+              aria-label="transcription model + preset"
+              fontSize="xs"
+              px="1"
+              py="0.5"
+              borderWidth="1px"
+              borderColor="border"
+              borderRadius="l1"
+              bg="canvas"
+            >
+              <optgroup label="basic-pitch (Spotify)">
+                <option value="basic_pitch:balanced">balanced</option>
+                <option value="basic_pitch:sensitive">sensitive (busy lines)</option>
+                <option value="basic_pitch:monophonic">monophonic (sustained)</option>
+              </optgroup>
+              <optgroup label="CREPE (monophonic)">
+                <option value="crepe:balanced">balanced</option>
+                <option value="crepe:sensitive">sensitive</option>
+              </optgroup>
+            </styled.select>
+            <Button
+              size="xs"
+              variant="outline"
+              onClick={() => inputRef.current?.click()}
+              disabled={busy}
+            >
+              Upload .mid…
+            </Button>
+            <styled.input
+              ref={inputRef}
+              type="file"
+              accept=".mid,.midi,audio/midi"
+              display="none"
+              onChange={(e) => {
+                const f = e.currentTarget.files?.[0];
+                if (f) void onFile(f);
+                e.currentTarget.value = "";
+              }}
+            />
+            {status.kind === "uploading" && (
+              <styled.span fontSize="xs" opacity="0.6">
+                uploading…
+              </styled.span>
+            )}
+            {status.kind === "ok" && (
+              <styled.span fontSize="xs" color="indigo.11">
+                updated ✓
+              </styled.span>
+            )}
+            {status.kind === "error" && (
+              <styled.span fontSize="xs" color="error">
+                {status.message}
+              </styled.span>
+            )}
+          </HStack>
 
-      <OffsetControls
-        offsetSec={offsetSec}
-        onSetOffset={onSetOffset}
-        onAlignToPlayhead={onAlignToPlayhead}
-      />
-      <SpeedControls speed={speed} onSetSpeed={onSetSpeed} />
-      <AutoMatchRow onAutoMatch={onAutoMatch} />
+          {status.kind === "transcribing" && (
+            <TranscribeProgress progress={status.progress} stage={status.stage} />
+          )}
+
+          <OffsetControls
+            offsetSec={offsetSec}
+            onSetOffset={onSetOffset}
+            onAlignToPlayhead={onAlignToPlayhead}
+          />
+          <SpeedControls speed={speed} onSetSpeed={onSetSpeed} />
+          <AutoMatchRow onAutoMatch={onAutoMatch} />
+        </>
+      )}
 
       <TrackPickerDialog
         open={pendingPick !== null}
@@ -1112,6 +1182,38 @@ function TabSourceCard({
         onPick={onPickTrack}
         onCancel={() => setPendingPick(null)}
       />
+    </Box>
+  );
+}
+
+interface TranscribeProgressProps {
+  progress: number;
+  stage: string;
+}
+
+function TranscribeProgress({ progress, stage }: TranscribeProgressProps) {
+  const pct = Math.max(0, Math.min(100, progress));
+  return (
+    <Box display="flex" flexDirection="column" gap="1">
+      <HStack justifyContent="space-between" alignItems="center">
+        <styled.span fontSize="xs" opacity="0.7">
+          transcribing… {stage}
+        </styled.span>
+        <styled.span fontSize="xs" opacity="0.7" fontVariantNumeric="tabular-nums">
+          {Math.round(pct)}%
+        </styled.span>
+      </HStack>
+      <Box position="relative" height="1.5" borderRadius="full" bg="bg.muted" overflow="hidden">
+        <Box
+          position="absolute"
+          top="0"
+          left="0"
+          bottom="0"
+          width={`${pct}%`}
+          bg="tomato.9"
+          transition="width 0.2s ease"
+        />
+      </Box>
     </Box>
   );
 }
