@@ -178,40 +178,6 @@ describe("planSystems", () => {
     expect(introAnchor?.x).toBe(r1.leadInPx);
   });
 
-  test("auto-scales the lead-in to the intro's duration ratio", () => {
-    // Intro is half a bar (0..1) then 6 bars of 2 s each at
-    // 1s, 3s, 5s, 7s, 9s, 11s. Lead-in should be ~half of one bar's
-    // width — not the 24 px gutter, which would cram intro notes
-    // together.
-    const out = planSystems(13, [1, 3, 5, 7, 9, 11], LAYOUT, 1200, {
-      minBarWidthPx: 200,
-    });
-    const r1 = out[0];
-    // Container 1200, minBar 200, introRatio 0.5:
-    //   barsPerRow = floor(1200/200 - 0.5) = 5
-    //   barWidth   = 1200 / (5 + 0.5) = 218.18…
-    //   leadIn     = barWidth * 0.5  = 109.09…
-    expect(r1.leadInPx).toBeCloseTo(109.09, 1);
-    // First row holds 5 of the 6 bars; total width = leadIn + 5*bw.
-    expect(r1.widthPx).toBeCloseTo(1200, 6);
-  });
-
-  test("falls back to the fixed gutter when there is no intro", () => {
-    // First bar at 0 → no pre-bar-1 content → lead-in stays at 24 px.
-    const out = planSystems(8, [0, 2, 4, 6], LAYOUT, 1000, { minBarWidthPx: 200 });
-    expect(out[0].leadInPx).toBe(24);
-  });
-
-  test("respects an explicit options.leadInPx (no auto-scaling)", () => {
-    // Intro 0..1 with first bar duration 1 (ratio 1.0) — would normally
-    // auto-scale to a full bar width. Explicit override wins.
-    const out = planSystems(5, [1, 2, 3], LAYOUT, 1200, {
-      minBarWidthPx: 200,
-      leadInPx: 24,
-    });
-    expect(out[0].leadInPx).toBe(24);
-  });
-
   test("subsequent rows have an empty lead-in (no pre-roll)", () => {
     // 6 bars; pin minBarWidthPx and pick container width so we get exactly 3 bars/row.
     const bars = [0, 1, 2, 3, 4, 5];

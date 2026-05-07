@@ -126,12 +126,12 @@ export function planSystems(
   if (dur <= 0) return [];
 
   const minBarWidthPx = options.minBarWidthPx ?? 200;
-  const FIXED_LEADIN_DEFAULT = 24;
+  const leadInPx = options.leadInPx ?? 24;
+  const containerW = Math.max(minBarWidthPx + leadInPx, containerWidthPx);
+  const usable = containerW - leadInPx;
 
   if (bars.length < 2) {
     // No bar grid → render the whole song as one undivided row.
-    const leadInPx = options.leadInPx ?? FIXED_LEADIN_DEFAULT;
-    const containerW = Math.max(minBarWidthPx + leadInPx, containerWidthPx);
     return [
       {
         startSec: 0,
@@ -147,42 +147,8 @@ export function planSystems(
     ];
   }
 
-  // Auto-scale the lead-in so the pre-bar-1 intro gets horizontal room
-  // proportional to its duration relative to a bar — otherwise notes
-  // landing before the first detected beat all collide inside a 24 px
-  // gutter. Capped at one bar's worth so a very long intro can't dwarf
-  // the rest of the row. Caller can opt out via `options.leadInPx`.
-  const introDur = Math.max(0, bars[0]);
-  const firstBarDur = Math.max(0.001, bars[1] - bars[0]);
-  const introRatio = options.leadInPx === undefined ? Math.min(1, introDur / firstBarDur) : 0;
-
-  let leadInPx = options.leadInPx ?? FIXED_LEADIN_DEFAULT;
-  const containerW = Math.max(minBarWidthPx + leadInPx, containerWidthPx);
-  let barsPerRow: number;
-  let barWidthPx: number;
-  if (introRatio > 0) {
-    // Solve container = leadIn + N*barWidth, leadIn = barWidth*introRatio.
-    barsPerRow = Math.max(1, Math.floor(containerW / minBarWidthPx - introRatio));
-    barWidthPx = containerW / (barsPerRow + introRatio);
-    if (barWidthPx >= minBarWidthPx) {
-      leadInPx = Math.max(FIXED_LEADIN_DEFAULT, barWidthPx * introRatio);
-      // If clamping pulled lead-in up to the floor, re-derive bar
-      // width so the row total still equals the container.
-      if (leadInPx > barWidthPx * introRatio) {
-        barWidthPx = (containerW - leadInPx) / barsPerRow;
-      }
-    } else {
-      // Tight container: keep bars at minBar and absorb leftover into
-      // the lead-in (still at least the default margin).
-      barWidthPx = minBarWidthPx;
-      leadInPx = Math.max(FIXED_LEADIN_DEFAULT, containerW - barsPerRow * barWidthPx);
-      barWidthPx = (containerW - leadInPx) / barsPerRow;
-    }
-  } else {
-    const usable = Math.max(minBarWidthPx, containerW - leadInPx);
-    barsPerRow = Math.max(1, Math.floor(usable / minBarWidthPx));
-    barWidthPx = usable / barsPerRow;
-  }
+  const barsPerRow = Math.max(1, Math.floor(usable / minBarWidthPx));
+  const barWidthPx = usable / barsPerRow;
 
   const rows: PlannedSystem[] = [];
   for (let firstBar = 0; firstBar < bars.length; firstBar += barsPerRow) {
