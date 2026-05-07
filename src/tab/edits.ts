@@ -86,6 +86,8 @@ export interface EditsFile {
    * Applied as: `songT = midiT / midiSpeed + midiOffsetSec`.
    */
   midiSpeed?: number;
+  /** Free-form lyrics + chord text, displayed in the side panel. */
+  lyrics?: string;
 }
 
 export const EMPTY_EDITS: EditsFile = {
@@ -94,6 +96,7 @@ export const EMPTY_EDITS: EditsFile = {
   sections: [],
   midiOffsetSec: 0,
   midiSpeed: 1,
+  lyrics: "",
 };
 
 export function noteId(startSec: number, pitch: number): NoteId {

@@ -75,6 +75,7 @@ function normalizeEditsFile(raw: unknown): EditsFile {
     // Clamp to a sane range so a corrupt edits file can't divide-by-zero
     // the time mapping or produce century-long bass notes.
     midiSpeed: speedRaw > 0.1 && speedRaw < 5 ? speedRaw : 1,
+    lyrics: typeof r.lyrics === "string" ? r.lyrics : "",
   };
 }
 
@@ -255,6 +256,15 @@ export function Player({ songId }: PlayerProps) {
     },
     [mutateEdits],
   );
+
+  const onSetLyrics = useCallback(
+    (lyrics: string) => {
+      mutateEdits((prev) => (prev.lyrics === lyrics ? prev : { ...prev, lyrics }));
+    },
+    [mutateEdits],
+  );
+
+  const [lyricsOpen, setLyricsOpen] = useState(false);
 
   /**
    * Auto-match heuristic. Reads the song's beats.json for the
@@ -658,7 +668,12 @@ export function Player({ songId }: PlayerProps) {
     <Grid
       mt="5"
       gap="6"
-      gridTemplateColumns={{ base: "1fr", lg: "minmax(320px, 380px) 1fr" }}
+      gridTemplateColumns={{
+        base: "1fr",
+        lg: lyricsOpen
+          ? "minmax(320px, 380px) 1fr minmax(280px, 360px)"
+          : "minmax(320px, 380px) 1fr",
+      }}
       alignItems="start"
       w="full"
     >
@@ -802,7 +817,10 @@ export function Player({ songId }: PlayerProps) {
             <StemMixer engine={engineRef.current} synth={synthRef.current} />
           )}
 
-          <HStack justifyContent="flex-end">
+          <HStack justifyContent="flex-end" gap="2">
+            <Button size="xs" variant="subtle" onClick={() => setLyricsOpen((v) => !v)}>
+              {lyricsOpen ? "Hide lyrics" : "Show lyrics"}
+            </Button>
             <Button size="xs" variant="subtle" onClick={() => setShowDebug((v) => !v)}>
               {showDebug ? "Hide debug" : "Show debug"}
             </Button>
@@ -827,6 +845,16 @@ export function Player({ songId }: PlayerProps) {
           />
         )}
       </GridItem>
+
+      {lyricsOpen && (
+        <GridItem minWidth="0">
+          <LyricsPanel
+            value={edits.lyrics ?? ""}
+            onChange={onSetLyrics}
+            onClose={() => setLyricsOpen(false)}
+          />
+        </GridItem>
+      )}
 
       <SectionDialog
         open={sectionDialogOpen}
@@ -1352,6 +1380,112 @@ function TrackPickerDialog({ open, tracks, suggested, onPick, onCancel }: TrackP
         </Dialog.Content>
       </Dialog.Positioner>
     </Dialog.Root>
+  );
+}
+
+interface LyricsPanelProps {
+  value: string;
+  onChange: (next: string) => void;
+  onClose: () => void;
+}
+
+/**
+ * Right-column reference panel for lyrics + chord-over-lyric text.
+ * The user pastes from anywhere (Ultimate Guitar, Genius, etc.); we
+ * just render it monospace and keep the source of truth in
+ * `bass.tab.edits.json` so it survives reloads.
+ *
+ * Edit/display split keeps formatting (alignment of chords above
+ * syllables) intact while reading: the textarea uses the same
+ * monospace font as the display so the column widths match.
+ */
+function LyricsPanel({ value, onChange, onClose }: LyricsPanelProps) {
+  const [editing, setEditing] = useState(value.length === 0);
+  const [draft, setDraft] = useState(value);
+  useEffect(() => {
+    setDraft(value);
+  }, [value]);
+
+  const commit = () => {
+    onChange(draft);
+    setEditing(false);
+  };
+
+  return (
+    <Box
+      p="3"
+      borderWidth="1px"
+      borderColor="border"
+      borderRadius="l3"
+      display="flex"
+      flexDirection="column"
+      gap="2"
+      height="calc(100vh - 240px)"
+    >
+      <HStack justifyContent="space-between" alignItems="center">
+        <styled.div fontSize="sm" fontWeight="semibold">
+          Lyrics
+        </styled.div>
+        <HStack gap="1">
+          {editing ? (
+            <>
+              <Button size="xs" variant="outline" onClick={() => setDraft(value)}>
+                Reset
+              </Button>
+              <Button size="xs" onClick={commit}>
+                Save
+              </Button>
+            </>
+          ) : (
+            <Button size="xs" variant="outline" onClick={() => setEditing(true)}>
+              Edit
+            </Button>
+          )}
+          <Button size="xs" variant="subtle" onClick={onClose} aria-label="hide lyrics panel">
+            ✕
+          </Button>
+        </HStack>
+      </HStack>
+      {editing ? (
+        <styled.textarea
+          value={draft}
+          onChange={(e) => setDraft(e.currentTarget.value)}
+          placeholder={
+            "Paste chord-over-lyric text here.\n" +
+            "Monospace font preserves chord alignment.\n\n" +
+            "       C        G       Am       F\n" +
+            "Hey jude, don't make it bad..."
+          }
+          flex="1"
+          minHeight="0"
+          px="2"
+          py="2"
+          borderWidth="1px"
+          borderColor="border"
+          borderRadius="l1"
+          bg="canvas"
+          fontFamily="mono"
+          fontSize="xs"
+          lineHeight="1.4"
+          resize="none"
+        />
+      ) : (
+        <styled.pre
+          flex="1"
+          overflow="auto"
+          m="0"
+          px="2"
+          py="2"
+          fontFamily="mono"
+          fontSize="xs"
+          lineHeight="1.4"
+          whiteSpace="pre-wrap"
+          opacity={value ? "1" : "0.5"}
+        >
+          {value || "(no lyrics — click Edit to paste)"}
+        </styled.pre>
+      )}
+    </Box>
   );
 }
 
