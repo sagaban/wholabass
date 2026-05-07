@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { Box, HStack, styled } from "styled-system/jsx";
 import { css } from "styled-system/css";
 import { type StemEngine } from "@/audio/engine";
+import { estimateKey } from "@/audio/key";
 import { loadBassNotes, type BassNote } from "@/audio/midi";
 import { Portal } from "@ark-ui/react/portal";
 import { Button, Popover } from "@/components/ui";
@@ -210,6 +211,7 @@ function TabSurface({
     [beats.beats, layout.beatsPerBar],
   );
   const groups = useMemo(() => beamGroups(tabNotes, beats.beats), [tabNotes, beats.beats]);
+  const keyEstimate = useMemo(() => estimateKey(tabNotes), [tabNotes]);
 
   // Container width drives how many bars fit per row. ResizeObserver
   // keeps it in sync with window resizes / parent layout changes.
@@ -875,8 +877,20 @@ function TabSurface({
 
   return (
     <Box mt="3">
-      <Box as="div" fontSize="xs" opacity="0.7" mb="1" fontVariantNumeric="tabular-nums">
-        ♩ = {Math.round(beats.tempo_bpm)} · {bars.length} bars · {tabNotes.length} notes
+      <Box as="div" fontSize="xs" opacity="0.85" mb="1" fontVariantNumeric="tabular-nums">
+        ♩ ={" "}
+        <styled.span color="tomato.11" fontWeight="semibold">
+          {Math.round(beats.tempo_bpm)}
+        </styled.span>{" "}
+        · {bars.length} bars · {tabNotes.length} notes
+        {keyEstimate && (
+          <>
+            {" · key "}
+            <styled.span color="tomato.11" fontWeight="semibold">
+              {keyEstimate.tonic} {keyEstimate.mode}
+            </styled.span>
+          </>
+        )}
       </Box>
       <Box
         ref={scrollRef}

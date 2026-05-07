@@ -966,10 +966,14 @@ function TabSourceCard({
     }
   };
 
+  // Transcription engine + preset travel together as "engine:preset"
+  // so the dropdown can offer the cross-product without a 2D picker.
+  const [transcribeChoice, setTranscribeChoice] = useState<string>("basic_pitch:balanced");
   const onTranscribe = async () => {
     setStatus({ kind: "transcribing" });
     try {
-      await invoke("transcribe_song", { songId });
+      const [engine, preset] = transcribeChoice.split(":");
+      await invoke("transcribe_song", { songId, engine, preset });
       setStatus({ kind: "ok" });
       onReplaced();
     } catch (err: unknown) {
@@ -1000,6 +1004,29 @@ function TabSourceCard({
         <Button size="xs" variant="outline" onClick={onTranscribe} disabled={busy}>
           Auto-transcribe
         </Button>
+        <styled.select
+          value={transcribeChoice}
+          onChange={(e) => setTranscribeChoice(e.currentTarget.value)}
+          disabled={busy}
+          aria-label="transcription model + preset"
+          fontSize="xs"
+          px="1"
+          py="0.5"
+          borderWidth="1px"
+          borderColor="border"
+          borderRadius="l1"
+          bg="canvas"
+        >
+          <optgroup label="basic-pitch (Spotify)">
+            <option value="basic_pitch:balanced">balanced</option>
+            <option value="basic_pitch:sensitive">sensitive (busy lines)</option>
+            <option value="basic_pitch:monophonic">monophonic (sustained)</option>
+          </optgroup>
+          <optgroup label="CREPE (monophonic)">
+            <option value="crepe:balanced">balanced</option>
+            <option value="crepe:sensitive">sensitive</option>
+          </optgroup>
+        </styled.select>
         <Button
           size="xs"
           variant="outline"

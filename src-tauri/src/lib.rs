@@ -144,6 +144,8 @@ async fn run_separate(
 #[tauri::command]
 async fn transcribe_song(
     song_id: String,
+    engine: Option<String>,
+    preset: Option<String>,
     state: State<'_, AppState>,
     app: AppHandle,
 ) -> Result<(), String> {
@@ -155,12 +157,16 @@ async fn transcribe_song(
     }
     let sc = take_sidecar(&state).await?;
     let app_emit = app.clone();
+    let engine = engine.unwrap_or_else(|| "basic_pitch".to_string());
+    let preset = preset.unwrap_or_else(|| "balanced".to_string());
     sc.call_with_progress(
         "transcribe",
         serde_json::json!({
             "song_id": song_id,
             "bass_path": bass_path.to_string_lossy(),
             "out_dir": out_dir.to_string_lossy(),
+            "engine": engine,
+            "preset": preset,
         }),
         |progress, stage| emit_progress(&app_emit, progress, stage),
     )

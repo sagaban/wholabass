@@ -19,7 +19,7 @@ class _StubMidi:
         Path(path).write_bytes(b"MThd\x00\x00\x00\x06")
 
 
-def _stub_predict(_audio_path: Path) -> Any:
+def _stub_predict(_audio_path: Path, _preset: str) -> Any:
     midi = _StubMidi()
     notes = [(0.0, 0.5, 40, 0.9, None), (0.5, 1.0, 43, 0.8, None)]
     return ({}, midi, notes)
@@ -44,6 +44,32 @@ def test_transcribe_writes_midi(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
 def test_transcribe_raises_when_bass_missing(tmp_path: Path) -> None:
     with pytest.raises(FileNotFoundError):
         tr.transcribe_bass("abc", tmp_path / "nope.wav", tmp_path / "out")
+
+
+def test_transcribe_rejects_unknown_preset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(tr, "_run_basic_pitch", _stub_predict)
+    bass = tmp_path / "bass.wav"
+    bass.write_bytes(b"x")
+    with pytest.raises(ValueError, match="unknown basic-pitch preset"):
+        tr.transcribe_bass("abc", bass, tmp_path / "out", preset="bogus")
+
+
+def test_transcribe_passes_preset_to_predict(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    captured: dict[str, str] = {}
+
+    def fake(audio_path: Path, preset: str) -> Any:
+        captured["preset"] = preset
+        return _stub_predict(audio_path, preset)
+
+    monkeypatch.setattr(tr, "_run_basic_pitch", fake)
+    bass = tmp_path / "bass.wav"
+    bass.write_bytes(b"x")
+    tr.transcribe_bass("abc", bass, tmp_path / "out", preset="sensitive")
+    assert captured["preset"] == "sensitive"
 
 
 def test_dispatch_transcribe_via_server(

@@ -78,13 +78,32 @@ def handle_download(params: JsonObject) -> JsonObject:
 
 
 def handle_transcribe(params: JsonObject) -> JsonObject:
-    from pipeline.transcribe import transcribe_bass
-
     song_id = _require_str(params, "song_id")
     bass_path = Path(_require_str(params, "bass_path"))
     out_dir = Path(_require_str(params, "out_dir"))
+    engine_raw = params.get("engine")
+    engine = engine_raw if isinstance(engine_raw, str) and engine_raw else "basic_pitch"
+    preset_raw = params.get("preset")
+    preset = preset_raw if isinstance(preset_raw, str) and preset_raw else "balanced"
 
-    return transcribe_bass(song_id=song_id, bass_path=bass_path, out_dir=out_dir)
+    if engine == "crepe":
+        from pipeline.transcribe_crepe import transcribe_bass_crepe
+
+        return transcribe_bass_crepe(
+            song_id=song_id,
+            bass_path=bass_path,
+            out_dir=out_dir,
+            preset=preset,
+        )
+
+    from pipeline.transcribe import transcribe_bass
+
+    return transcribe_bass(
+        song_id=song_id,
+        bass_path=bass_path,
+        out_dir=out_dir,
+        preset=preset,
+    )
 
 
 def handle_models(_params: JsonObject) -> JsonObject:

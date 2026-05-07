@@ -1808,6 +1808,23 @@ wheels = [
 ]
 
 [[package]]
+name = "torchcrepe"
+version = "0.0.24"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "librosa" },
+    { name = "resampy" },
+    { name = "scipy" },
+    { name = "torch" },
+    { name = "torchaudio" },
+    { name = "tqdm" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/c8/98/0da59205962218ed1be90034aa11db3e2e10a54293508ef0aa07a1e5ceb9/torchcrepe-0.0.24.tar.gz", hash = "sha256:7eebdd59bdfed822ac19820cb73823335e4eba88f1c76c411a7ab05f7ca6db0a", size = 72329307, upload-time = "2025-05-16T18:41:41.393Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/9b/a9/799d00b9dc7a18bb0ff53fccc187b1d83c690e337d078345c17ec0a1a224/torchcrepe-0.0.24-py3-none-any.whl", hash = "sha256:ec054c23c9d45328f213f93a0131570a3f0e5903e9382792bed95f17a8c36d5a", size = 72326298, upload-time = "2025-05-16T18:41:13.419Z" },
+]
+
+[[package]]
 name = "tqdm"
 version = "4.67.3"
 source = { registry = "https://pypi.org/simple" }
@@ -1891,6 +1908,7 @@ dependencies = [
     { name = "librosa" },
     { name = "soundfile" },
     { name = "torchcodec" },
+    { name = "torchcrepe" },
     { name = "yt-dlp" },
 ]
 
@@ -1908,6 +1926,7 @@ requires-dist = [
     { name = "librosa", specifier = ">=0.10" },
     { name = "soundfile", specifier = ">=0.13" },
     { name = "torchcodec", specifier = ">=0.4" },
+    { name = "torchcrepe", specifier = ">=0.0.23" },
     { name = "yt-dlp", specifier = ">=2024.5.27" },
 ]
 

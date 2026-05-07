@@ -37,7 +37,38 @@ ONNX_MODEL_PATH = (
 )
 
 
-def _run_basic_pitch(audio_path: Path) -> Any:
+# basic-pitch parameter presets. Each preset adjusts the onset /
+# frame thresholds + minimum note length the model uses to commit to
+# a note. Tradeoff is "miss real notes" vs "hallucinate spurious
+# notes"; the right setting depends on how clean the bass stem is.
+PRESETS: dict[str, dict[str, Any]] = {
+    "balanced": {
+        "onset_threshold": 0.5,
+        "frame_threshold": 0.3,
+        "minimum_note_length": 127.7,
+        "melodia_trick": True,
+    },
+    # Catch quieter / quicker notes — good for busy lines, can over-fire
+    # on sustained passages with vibrato or slides.
+    "sensitive": {
+        "onset_threshold": 0.3,
+        "frame_threshold": 0.2,
+        "minimum_note_length": 80.0,
+        "melodia_trick": True,
+    },
+    # Lean toward sustained, single-note bass lines. Higher minimum
+    # length filters out blips; the melodia post-processor is off so
+    # we don't get auto-inferred 5ths / harmonics.
+    "monophonic": {
+        "onset_threshold": 0.55,
+        "frame_threshold": 0.4,
+        "minimum_note_length": 200.0,
+        "melodia_trick": False,
+    },
+}
+
+
+def _run_basic_pitch(audio_path: Path, preset: str) -> Any:
     """Returns (model_output, pretty_midi.PrettyMIDI, note_events).
 
     basic-pitch prints progress text to stdout, which is exactly the
@@ -47,18 +78,33 @@ def _run_basic_pitch(audio_path: Path) -> Any:
     """
     from basic_pitch.inference import predict
 
+    params = PRESETS.get(preset, PRESETS["balanced"])
     with contextlib.redirect_stdout(sys.stderr):
-        return predict(str(audio_path), model_or_model_path=str(ONNX_MODEL_PATH))
+        return predict(
+            str(audio_path),
+            model_or_model_path=str(ONNX_MODEL_PATH),
+            onset_threshold=params["onset_threshold"],
+            frame_threshold=params["frame_threshold"],
+            minimum_note_length=params["minimum_note_length"],
+            melodia_trick=params["melodia_trick"],
+        )
 
 
-def transcribe_bass(song_id: str, bass_path: Path, out_dir: Path) -> dict[str, Any]:
+def transcribe_bass(
+    song_id: str,
+    bass_path: Path,
+    out_dir: Path,
+    preset: str = "balanced",
+) -> dict[str, Any]:
     if not bass_path.is_file():
         raise FileNotFoundError(f"bass stem not found: {bass_path}")
+    if preset not in PRESETS:
+        raise ValueError(f"unknown basic-pitch preset: {preset}")
 
     out_dir.mkdir(parents=True, exist_ok=True)
     progress.emit(0.0, "transcribing")
 
-    _, midi, note_events = _run_basic_pitch(bass_path)
+    _, midi, note_events = _run_basic_pitch(bass_path, preset)
 
     progress.emit(95.0, "transcribing")
     midi_path = out_dir / "bass.mid"
@@ -69,4 +115,5 @@ def transcribe_bass(song_id: str, bass_path: Path, out_dir: Path) -> dict[str, A
         "song_id": song_id,
         "midi_path": str(midi_path),
         "note_count": len(note_events),
+        "preset": preset,
     }

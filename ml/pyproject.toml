@@ -12,6 +12,9 @@ dependencies = [
   # Already transitive via basic-pitch; pinned here so the beat tracker
   # in pipeline/beats.py owns its version bound.
   "librosa>=0.10",
+  # Monophonic pitch tracker — alternative to basic-pitch for bass
+  # transcription. Reuses the torch already pulled by demucs.
+  "torchcrepe>=0.0.23",
 ]
 
 [dependency-groups]
@@ -44,6 +47,8 @@ module = [
   "pretty_midi",
   "librosa",
   "librosa.*",
+  "torchcrepe",
+  "torchcrepe.*",
 ]
 ignore_missing_imports = true
 
