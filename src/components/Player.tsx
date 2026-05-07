@@ -20,6 +20,7 @@ import {
   extractTrackToMidi,
   findBestAlignment,
   loadBassNotes,
+  pitchName,
   readMidiAlignmentMetadata,
   readMidiOnsets,
   suggestBassTrack,
@@ -1287,12 +1288,6 @@ interface TrackPickerDialogProps {
   suggested: number;
   onPick: (index: number) => void;
   onCancel: () => void;
-}
-
-function pitchName(midi: number): string {
-  const names = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
-  const octave = Math.floor(midi / 12) - 1;
-  return `${names[midi % 12]}${octave}`;
 }
 
 function TrackPickerDialog({ open, tracks, suggested, onPick, onCancel }: TrackPickerDialogProps) {

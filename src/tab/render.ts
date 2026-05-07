@@ -26,7 +26,9 @@ export interface TabLayout {
 export const DEFAULT_LAYOUT: TabLayout = {
   pixelsPerSecond: 80,
   stringLineSpacing: 18,
-  topPadding: 28,
+  // Header band fits, top to bottom: section labels (2..18), bar
+  // chord-root labels (~24..36), bar numbers (~38..46).
+  topPadding: 46,
   bottomPadding: 24,
   beatsPerBar: 4,
   stringCount: 4,

@@ -12,6 +12,13 @@ export interface BassNote {
   velocity: number;
 }
 
+/** MIDI pitch → name + octave (e.g., 60 → "C4", 28 → "E1"). */
+export function pitchName(midi: number): string {
+  const names = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
+  const octave = Math.floor(midi / 12) - 1;
+  return `${names[((midi % 12) + 12) % 12]}${octave}`;
+}
+
 /** Fetch + parse `library/<id>/bass.mid` into a flat note list (sorted by start). */
 export async function loadBassNotes(songId: string): Promise<BassNote[]> {
   const bytes = await invoke<ArrayBuffer>("read_midi", { songId });

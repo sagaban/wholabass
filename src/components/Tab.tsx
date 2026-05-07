@@ -4,7 +4,7 @@ import { Box, HStack, styled } from "styled-system/jsx";
 import { css } from "styled-system/css";
 import { type StemEngine } from "@/audio/engine";
 import { estimateKey } from "@/audio/key";
-import { loadBassNotes, type BassNote } from "@/audio/midi";
+import { loadBassNotes, pitchName, type BassNote } from "@/audio/midi";
 import { Portal } from "@ark-ui/react/portal";
 import { Button, Popover } from "@/components/ui";
 import {
@@ -869,6 +869,7 @@ function TabSurface({
           }
         }
       }
+
       raf = requestAnimationFrame(tick);
     };
     raf = requestAnimationFrame(tick);
@@ -1173,21 +1174,34 @@ function TabSystemRow({
   registerSystemEl,
   registerPlayhead,
 }: TabSystemRowProps) {
-  // Local bar list for this row (positions relative to system.startSec).
+  // Per-bar info for this row: position, bar number, and the root
+  // note label derived from the first bass note that lands on the
+  // bar's downbeat. The downbeat window is the first quarter of the
+  // bar so a bass slide later in the bar doesn't override the root.
   const localBars = useMemo(() => {
-    const out: { localX: number; barNumber: number }[] = [];
+    const out: { localX: number; barNumber: number; rootLabel: string | null }[] = [];
     const allBars = barLineTimes(beats.beats, layout.beatsPerBar);
     for (let i = 0; i < allBars.length; i++) {
       const t = allBars[i];
-      if (t >= system.startSec && t < system.endSec) {
-        out.push({
-          localX: rowTimeToX(system, t),
-          barNumber: i + 1,
-        });
+      if (t < system.startSec || t >= system.endSec) continue;
+      const end = i + 1 < allBars.length ? allBars[i + 1] : system.endSec;
+      const downbeatWindow = t + (end - t) * 0.25;
+      let rootPitch: number | null = null;
+      for (const n of notes) {
+        if (n.startSec >= downbeatWindow) break;
+        if (n.startSec >= t && (rootPitch === null || n.pitch < rootPitch)) {
+          rootPitch = n.pitch;
+        }
       }
+      const rootLabel = rootPitch === null ? null : pitchName(rootPitch).replace(/-?\d+$/, "");
+      out.push({
+        localX: rowTimeToX(system, t),
+        barNumber: i + 1,
+        rootLabel,
+      });
     }
     return out;
-  }, [beats.beats, layout, system]);
+  }, [beats.beats, layout, system, notes]);
 
   const stemTop = stringIndexToY(0, layout) + 2;
   const stemBottom = stringIndexToY(0, layout) + STEM_LENGTH_PX;
@@ -1275,7 +1289,7 @@ function TabSystemRow({
           </text>
         ))}
 
-        {/* Bar lines + bar numbers */}
+        {/* Bar lines + chord-root labels + bar numbers */}
         {localBars.map((b) => (
           <g key={`bar-${b.barNumber}`}>
             <line
@@ -1286,6 +1300,18 @@ function TabSystemRow({
               stroke="var(--colors-border)"
               strokeWidth={b.barNumber === 1 ? 2 : 1}
             />
+            {b.rootLabel && (
+              <text
+                x={b.localX + 3}
+                y={layout.topPadding - 22}
+                fontSize="13"
+                fontWeight="600"
+                fill="var(--colors-tomato-11)"
+                style={{ fontVariantNumeric: "tabular-nums" }}
+              >
+                {b.rootLabel}
+              </text>
+            )}
             <text
               x={b.localX + 3}
               y={layout.topPadding - 8}
