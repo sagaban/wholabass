@@ -20,8 +20,10 @@ import {
 import { DEFAULT_TUNING, enumeratePlacements, fingerNotes, type TabNote } from "@/tab/optimizer";
 import { beamGroups, classifyNote, rhythmGlyph } from "@/tab/rhythm";
 import {
+  applyCutsToNotes,
   applyEdits,
   tabNoteId,
+  type CutSpan,
   type EditOp,
   type EditsFile,
   type NoteId,
@@ -48,6 +50,8 @@ interface TabProps {
    */
   transact: (fn: () => void) => void;
   onRemoveSectionAt: (index: number) => void;
+  /** Ripple-delete a `[startSec, endSec)` audio-time span. */
+  onRippleDelete: (span: CutSpan) => void;
 }
 
 interface BeatsPayload {
@@ -66,8 +70,9 @@ export function Tab({
   onEdit,
   transact,
   onRemoveSectionAt,
+  onRippleDelete,
 }: TabProps) {
-  const [optimizerNotes, setOptimizerNotes] = useState<TabNote[]>([]);
+  const [mappedBass, setMappedBass] = useState<readonly BassNote[]>([]);
   const [beats, setBeats] = useState<BeatsPayload | null>(null);
   const [status, setStatus] = useState<LoadStatus>("loading");
 
@@ -93,7 +98,7 @@ export function Tab({
                 startSec: n.startSec / midiSpeed + midiOffsetSec,
                 durSec: n.durSec / midiSpeed,
               }));
-        setOptimizerNotes(fingerNotes(shifted as readonly BassNote[]));
+        setMappedBass(shifted);
         setBeats(b);
         setStatus("ready");
       } catch (err: unknown) {
@@ -105,6 +110,17 @@ export function Tab({
     };
   }, [songId, tabSourceRev, midiOffsetSec, midiSpeed]);
 
+  // Ripple-delete cuts apply *before* fingering — the optimizer sees
+  // already-shifted notes so its TabNote ids match the same time
+  // domain the synth uses (Player.tsx applies the same `cuts` to its
+  // bass feed). Edit ops then layer on top, keyed to those same ids.
+  // Memoise so the `?? []` fallback doesn't churn the optimizer on
+  // every parent render when no cuts exist.
+  const cuts = useMemo(() => edits.cuts ?? [], [edits.cuts]);
+  const optimizerNotes = useMemo(
+    () => fingerNotes(applyCutsToNotes(mappedBass, cuts) as readonly BassNote[]),
+    [mappedBass, cuts],
+  );
   const displayNotes = useMemo(() => applyEdits(optimizerNotes, edits), [optimizerNotes, edits]);
 
   if (status === "loading") {
@@ -132,6 +148,7 @@ export function Tab({
       onEdit={onEdit}
       transact={transact}
       onRemoveSectionAt={onRemoveSectionAt}
+      onRippleDelete={onRippleDelete}
     />
   );
 }
@@ -145,6 +162,7 @@ interface TabSurfaceProps {
   onEdit: (op: EditOp) => void;
   transact: (fn: () => void) => void;
   onRemoveSectionAt: (index: number) => void;
+  onRippleDelete: (span: CutSpan) => void;
 }
 
 interface AddNoteTarget {
@@ -198,6 +216,7 @@ function TabSurface({
   onEdit,
   transact,
   onRemoveSectionAt,
+  onRippleDelete,
 }: TabSurfaceProps) {
   const layout = DEFAULT_LAYOUT;
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -477,6 +496,34 @@ function TabSurface({
     setSelection(new Set());
     setSelectedId(null);
   }, [selection, ctxCopy, transact, onEdit]);
+
+  /**
+   * Ripple-delete the current selection. The cut span runs from the
+   * earliest selected note's onset to the next *surviving* note's
+   * onset, so deleting one note (e.g. G in C-E-G-A) hands its slot to
+   * the next note (A slides into G's onset). When no surviving note
+   * follows, the span ends at the latest selected note's `endSec`.
+   */
+  const ctxRippleDelete = useCallback(() => {
+    if (selection.size === 0) return;
+    const picked = tabNotes
+      .filter((n) => selection.has(tabNoteId(n)))
+      .toSorted((a, b) => a.startSec - b.startSec);
+    if (picked.length === 0) return;
+    const first = picked[0];
+    const last = picked[picked.length - 1];
+    const startSec = first.startSec;
+    const successor = tabNotes.find(
+      (n) => n.startSec > last.startSec && !selection.has(tabNoteId(n)),
+    );
+    const endSec = successor ? successor.startSec : last.startSec + Math.max(0, last.durSec);
+    if (endSec <= startSec) return;
+    transact(() => {
+      onRippleDelete({ startSec, endSec });
+    });
+    setSelection(new Set());
+    setSelectedId(null);
+  }, [selection, tabNotes, transact, onRippleDelete]);
 
   const ctxPasteAt = useCallback(
     (sec: number) => {
@@ -791,11 +838,18 @@ function TabSurface({
         return;
       }
       if ((e.key === "Backspace" || e.key === "Delete") && selection.size > 0) {
-        transact(() => {
-          for (const id of selection) onEdit({ kind: "delete", id });
-        });
-        setSelection(new Set());
-        setSelectedId(null);
+        // Shift = ripple delete (also closes the gap so later notes
+        // slide back). Plain delete just removes the notes, leaving
+        // their slots silent.
+        if (e.shiftKey) {
+          ctxRippleDelete();
+        } else {
+          transact(() => {
+            for (const id of selection) onEdit({ kind: "delete", id });
+          });
+          setSelection(new Set());
+          setSelectedId(null);
+        }
         e.preventDefault();
         return;
       }
@@ -837,7 +891,7 @@ function TabSurface({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [selection, tabNotes, onEdit, engine, transact]);
+  }, [selection, tabNotes, onEdit, engine, transact, ctxRippleDelete]);
 
   // rAF: place playhead in the active system, scroll that row into view
   // when it changes (or when the user is mid-playback and seeks).
@@ -982,12 +1036,17 @@ function TabSurface({
           y={ctxMenu.clientY}
           canCopy={selection.size > 0}
           canPaste={clipboardRef.current.length > 0}
+          canRippleDelete={selection.size > 0}
           onCopy={() => {
             ctxCopy();
             closeCtxMenu();
           }}
           onCut={() => {
             ctxCut();
+            closeCtxMenu();
+          }}
+          onRippleDelete={() => {
+            ctxRippleDelete();
             closeCtxMenu();
           }}
           onPaste={() => {
@@ -1014,8 +1073,10 @@ interface ContextMenuProps {
   y: number;
   canCopy: boolean;
   canPaste: boolean;
+  canRippleDelete: boolean;
   onCopy: () => void;
   onCut: () => void;
+  onRippleDelete: () => void;
   onPaste: () => void;
   onInsertEmptyBar: () => void;
   onDuplicateBar: () => void;
@@ -1027,8 +1088,10 @@ function ContextMenu({
   y,
   canCopy,
   canPaste,
+  canRippleDelete,
   onCopy,
   onCut,
+  onRippleDelete,
   onPaste,
   onInsertEmptyBar,
   onDuplicateBar,
@@ -1048,6 +1111,11 @@ function ContextMenu({
   const items: { label: string; disabled?: boolean; run: () => void }[] = [
     { label: "Copy", disabled: !canCopy, run: onCopy },
     { label: "Cut", disabled: !canCopy, run: onCut },
+    {
+      label: "Ripple delete (close gap)",
+      disabled: !canRippleDelete,
+      run: onRippleDelete,
+    },
     { label: "Paste here", disabled: !canPaste, run: onPaste },
     { label: "Insert empty bar after this", run: onInsertEmptyBar },
     { label: "Duplicate this bar", run: onDuplicateBar },

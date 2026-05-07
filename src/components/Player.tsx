@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { SoundTouchNode } from "@soundtouchjs/audio-worklet";
@@ -34,10 +34,14 @@ import { PianoRoll } from "@/components/PianoRoll";
 import { Tab } from "@/components/Tab";
 import {
   EMPTY_EDITS,
+  addCut,
   addSection,
+  applyCutsToNotes,
+  applyNoteEditsToBass,
   removeSectionAt,
   updateSectionAt,
   upsertEdit,
+  type CutSpan,
   type EditOp,
   type EditsFile,
   type SectionLabel,
@@ -68,10 +72,23 @@ function normalizeEditsFile(raw: unknown): EditsFile {
   if (!raw || typeof raw !== "object") return EMPTY_EDITS;
   const r = raw as Partial<EditsFile>;
   const speedRaw = typeof r.midiSpeed === "number" ? r.midiSpeed : 1;
+  // Cuts are stored in sequential order, each in the time domain
+  // produced by the prior cuts. Just shape-check each entry; no
+  // sorting or merging — that would change the meaning of later cuts.
+  const cuts = Array.isArray(r.cuts)
+    ? r.cuts.filter(
+        (c): c is CutSpan =>
+          !!c &&
+          typeof (c as CutSpan).startSec === "number" &&
+          typeof (c as CutSpan).endSec === "number" &&
+          (c as CutSpan).endSec > (c as CutSpan).startSec,
+      )
+    : [];
   return {
     version: typeof r.version === "number" ? r.version : EMPTY_EDITS.version,
     notes: Array.isArray(r.notes) ? (r.notes as EditOp[]) : [],
     sections: Array.isArray(r.sections) ? r.sections : [],
+    cuts,
     midiOffsetSec: typeof r.midiOffsetSec === "number" ? r.midiOffsetSec : 0,
     // Clamp to a sane range so a corrupt edits file can't divide-by-zero
     // the time mapping or produce century-long bass notes.
@@ -261,6 +278,22 @@ export function Player({ songId }: PlayerProps) {
   const onSetLyrics = useCallback(
     (lyrics: string) => {
       mutateEdits((prev) => (prev.lyrics === lyrics ? prev : { ...prev, lyrics }));
+    },
+    [mutateEdits],
+  );
+
+  /**
+   * Ripple-delete: drop a `[startSec, endSec)` audio-time span from
+   * the MIDI. Notes inside vanish; later notes' startSec shift back by
+   * the span's duration so the next surviving note slides into the
+   * deleted slot. The audio recording is untouched. No-op for an
+   * empty / inverted span.
+   */
+  const onRippleDelete = useCallback(
+    (span: CutSpan) => {
+      if (!Number.isFinite(span.startSec) || !Number.isFinite(span.endSec)) return;
+      if (span.endSec <= span.startSec) return;
+      mutateEdits((prev) => ({ ...prev, cuts: addCut(prev.cuts ?? [], span) }));
     },
     [mutateEdits],
   );
@@ -466,32 +499,45 @@ export function Player({ songId }: PlayerProps) {
 
   // Load bass MIDI separately so a user-uploaded replacement (which
   // bumps tabSourceRev) can refresh the synth without re-decoding the
-  // 4 stem WAVs. Empty notes when bass.mid is missing. The offset +
-  // speed dependencies mean the synth also refreshes when the user
-  // nudges either control.
+  // 4 stem WAVs. The mapped result is cached so the edits/cuts pass
+  // below can re-run synchronously without re-reading the file — that
+  // way a ripple-delete during playback doesn't produce a 50-100 ms
+  // gap of cancelled-but-not-rescheduled audio.
   const midiOffsetSec = edits.midiOffsetSec ?? 0;
   const midiSpeed = edits.midiSpeed && edits.midiSpeed > 0 ? edits.midiSpeed : 1;
+  const editNotes = edits.notes;
+  const cuts = useMemo(() => edits.cuts ?? [], [edits.cuts]);
+  const [mappedBass, setMappedBass] = useState<readonly BassNote[]>([]);
   useEffect(() => {
     let cancelled = false;
     void (async () => {
       const raw = await loadBassNotes(songId).catch(() => [] as BassNote[]);
       if (cancelled) return;
-      const notes = mapMidiNotes(raw, midiOffsetSec, midiSpeed);
-      bassNotesRef.current = notes;
-      const synth = synthRef.current;
-      if (synth) {
-        synth.cancel();
-        synth.setNotes(notes);
-        const engine = engineRef.current;
-        if (engine?.isPlaying) {
-          synth.schedule(engine.getCurrentTime(), engine.getTempo());
-        }
-      }
+      setMappedBass(mapMidiNotes(raw, midiOffsetSec, midiSpeed));
     })();
     return () => {
       cancelled = true;
     };
   }, [songId, tabSourceRev, midiOffsetSec, midiSpeed]);
+
+  // Re-apply cuts + note edits whenever any of those inputs change.
+  // Cuts run first (filter inside, shift later notes back) so edit ids
+  // reference the same shifted time domain that the renderer + synth
+  // use. Synchronous — no async gap — so a ripple-delete mid-playback
+  // cancels and re-schedules in the same frame.
+  useEffect(() => {
+    const shifted = applyCutsToNotes(mappedBass, cuts);
+    const notes = applyNoteEditsToBass(shifted, editNotes);
+    bassNotesRef.current = notes;
+    const synth = synthRef.current;
+    if (!synth) return;
+    synth.cancel();
+    synth.setNotes(notes);
+    const engine = engineRef.current;
+    if (engine?.isPlaying) {
+      synth.schedule(engine.getCurrentTime(), engine.getTempo());
+    }
+  }, [mappedBass, editNotes, cuts]);
 
   // Drive the position display while playing; tick the loop watcher too.
   useEffect(() => {
@@ -797,12 +843,17 @@ export function Player({ songId }: PlayerProps) {
             onSetSpeed={onSetMidiSpeed}
             onAutoMatch={onAutoMatchMidi}
             onReplaced={() => {
-              // Clear any note-level edits — they were keyed to the
-              // previous bass.mid's note ids and would otherwise sit
-              // on top of the new optimizer output as phantom extras.
-              // Wrapped so a single Cmd+Z brings them back if the user
-              // wanted to preserve them.
-              mutateEdits((prev) => (prev.notes.length === 0 ? prev : { ...prev, notes: [] }));
+              // Clear note-level edits AND ripple-delete cuts — both
+              // were anchored to the previous bass.mid's bar timing
+              // and would otherwise produce phantom extras / a hole in
+              // the wrong place. Wrapped so a single Cmd+Z brings them
+              // back if the user wanted to preserve them.
+              mutateEdits((prev) => {
+                const noNotes = prev.notes.length === 0;
+                const noCuts = !prev.cuts || prev.cuts.length === 0;
+                if (noNotes && noCuts) return prev;
+                return { ...prev, notes: [], cuts: [] };
+              });
               setTabSourceRev((r) => r + 1);
             }}
           />
@@ -843,6 +894,7 @@ export function Player({ songId }: PlayerProps) {
             onEdit={onEdit}
             transact={transact}
             onRemoveSectionAt={onRemoveSectionAt}
+            onRippleDelete={onRippleDelete}
           />
         )}
       </GridItem>

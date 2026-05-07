@@ -12,11 +12,26 @@
  * underlying MIDI is re-transcribed.
  */
 
+import type { BassNote } from "@/audio/midi";
 import type { TabNote } from "@/tab/optimizer";
 
 export const EDITS_VERSION = 1;
 
 export type NoteId = string;
+
+/**
+ * `[startSec, endSec)` audio-time span the user has ripple-deleted from
+ * the MIDI. Notes inside the span are dropped; notes after shift back
+ * by the span's duration so the next surviving note slides into the
+ * deleted slot. The audio recording is untouched. Used to fix an over-
+ * transcribed MIDI: extra notes the AI added that the song doesn't
+ * contain are deleted, and the rest move forward to stay aligned with
+ * the recording.
+ */
+export interface CutSpan {
+  startSec: number;
+  endSec: number;
+}
 
 export type EditOp =
   | { kind: "replace"; id: NoteId; string: number; fret: number }
@@ -71,6 +86,12 @@ export interface EditsFile {
   notes: EditOp[];
   sections: SectionLabel[];
   /**
+   * Ripple-delete spans in audio time of the original mapped MIDI.
+   * Sorted, non-overlapping. Cuts apply *before* note edits, so edit
+   * ids reference the post-cut (shifted) note positions.
+   */
+  cuts?: CutSpan[];
+  /**
    * Song-time shift applied to every MIDI event when loading bass.mid.
    * Lets the user align an uploaded GP / Songsterr export to where the
    * bass actually enters in the audio (their `t = 0` rarely matches).
@@ -94,10 +115,68 @@ export const EMPTY_EDITS: EditsFile = {
   version: EDITS_VERSION,
   notes: [],
   sections: [],
+  cuts: [],
   midiOffsetSec: 0,
   midiSpeed: 1,
   lyrics: "",
 };
+
+/**
+ * Append a cut span. Spans are stored in *sequential* order: each one
+ * is interpreted in the time domain that results from applying every
+ * earlier cut. That matches the user's mental model (they ripple-
+ * delete in whatever view they currently see), and lets the apply
+ * function fold left without any merge/overlap math.
+ */
+export function addCut(cuts: readonly CutSpan[], span: CutSpan): CutSpan[] {
+  if (span.endSec <= span.startSec) return cuts.slice();
+  return [...cuts, span];
+}
+
+/**
+ * Remove a cut by index. Note: cuts are sequential, so removing one
+ * from the middle changes the time domain that later cuts were
+ * defined in. In practice we expect callers to remove only the last
+ * cut (i.e., undo); arbitrary mid-list removal may reposition later
+ * cut spans relative to the original notes.
+ */
+export function removeCutAt(cuts: readonly CutSpan[], index: number): CutSpan[] {
+  if (index < 0 || index >= cuts.length) return cuts.slice();
+  const out = cuts.slice();
+  out.splice(index, 1);
+  return out;
+}
+
+/**
+ * Apply the sequential cut list to a note list. For each cut in
+ * order: drop notes whose start is inside `[cut.startSec, cut.endSec)`
+ * and shift later notes back by the cut's duration. Returns a new
+ * list with `startSec` rewritten to match the user's current view —
+ * once cuts apply, the shifted time IS the time (no separate "audio
+ * time" domain to translate to/from for downstream consumers).
+ */
+export function applyCutsToNotes<T extends { startSec: number }>(
+  notes: readonly T[],
+  cuts: readonly CutSpan[],
+): T[] {
+  if (cuts.length === 0) return notes.slice();
+  let result: readonly T[] = notes;
+  for (const cut of cuts) {
+    const dur = cut.endSec - cut.startSec;
+    if (dur <= 0) continue;
+    const next: T[] = [];
+    for (const n of result) {
+      if (n.startSec >= cut.startSec && n.startSec < cut.endSec) continue;
+      if (n.startSec >= cut.endSec) {
+        next.push({ ...n, startSec: n.startSec - dur });
+      } else {
+        next.push(n);
+      }
+    }
+    result = next;
+  }
+  return result === notes ? notes.slice() : (result as T[]);
+}
 
 export function noteId(startSec: number, pitch: number): NoteId {
   return `${startSec.toFixed(4)}-${pitch}`;
@@ -145,6 +224,41 @@ export function applyEdits(notes: readonly TabNote[], edits: EditsFile): TabNote
     } else {
       out.push(n);
     }
+  }
+  for (const n of additions) out.push(n);
+  out.sort((a, b) => a.startSec - b.startSec);
+  return out;
+}
+
+/**
+ * Apply the playback-affecting subset of note ops (`delete` + `add`) to
+ * the bass-synth feed. `replace` is fingering-only and ignored here.
+ * Input notes are assumed to already have cuts applied (or no cuts);
+ * ids are computed against `n.startSec`, so callers must pass a list
+ * in the same time domain the edit ids were produced in.
+ */
+export function applyNoteEditsToBass(
+  notes: readonly BassNote[],
+  ops: readonly EditOp[],
+): BassNote[] {
+  if (ops.length === 0) return notes.slice();
+  const deleteIds = new Set<NoteId>();
+  const additions: BassNote[] = [];
+  for (const op of ops) {
+    if (op.kind === "delete") deleteIds.add(op.id);
+    else if (op.kind === "add") {
+      additions.push({
+        pitch: op.pitch,
+        startSec: op.startSec,
+        durSec: op.durSec,
+        velocity: op.velocity ?? 1,
+      });
+    }
+  }
+  const out: BassNote[] = [];
+  for (const n of notes) {
+    if (deleteIds.has(noteId(n.startSec, n.pitch))) continue;
+    out.push(n);
   }
   for (const n of additions) out.push(n);
   out.sort((a, b) => a.startSec - b.startSec);

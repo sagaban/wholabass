@@ -1,18 +1,24 @@
 import { describe, expect, test } from "vitest";
 import {
   EMPTY_EDITS,
+  addCut,
   addSection,
+  applyCutsToNotes,
   applyEdits,
+  applyNoteEditsToBass,
   noteId,
+  removeCutAt,
   removeSectionAt,
   tabNoteId,
   updateSectionAt,
   upsertEdit,
+  type CutSpan,
   type EditOp,
   type EditsFile,
   type SectionLabel,
 } from "./edits";
 import type { TabNote } from "./optimizer";
+import type { BassNote } from "@/audio/midi";
 
 const tn = (startSec: number, pitch: number, string: number, fret: number): TabNote => ({
   startSec,
@@ -195,5 +201,130 @@ describe("addSection / removeSectionAt", () => {
   test("updateSectionAt is a no-op for out-of-range indices", () => {
     expect(updateSectionAt([a], -1, { name: "x" })).toEqual([a]);
     expect(updateSectionAt([a], 99, { name: "x" })).toEqual([a]);
+  });
+});
+
+const bn = (startSec: number, pitch: number): BassNote => ({
+  startSec,
+  pitch,
+  durSec: 0.25,
+  velocity: 1,
+});
+
+describe("addCut / removeCutAt", () => {
+  test("addCut appends in order (sequential semantics, no merge)", () => {
+    const out = addCut([{ startSec: 0, endSec: 2 }], { startSec: 1, endSec: 3 });
+    expect(out).toEqual([
+      { startSec: 0, endSec: 2 },
+      { startSec: 1, endSec: 3 },
+    ]);
+  });
+  test("addCut ignores zero-length / inverted spans", () => {
+    const cuts = [{ startSec: 0, endSec: 2 }];
+    expect(addCut(cuts, { startSec: 5, endSec: 5 })).toEqual(cuts);
+    expect(addCut(cuts, { startSec: 5, endSec: 4 })).toEqual(cuts);
+  });
+  test("removeCutAt drops the indexed span", () => {
+    const cuts: CutSpan[] = [
+      { startSec: 0, endSec: 1 },
+      { startSec: 2, endSec: 3 },
+    ];
+    expect(removeCutAt(cuts, 0)).toEqual([{ startSec: 2, endSec: 3 }]);
+  });
+  test("removeCutAt is a no-op for out-of-range indices", () => {
+    const cuts: CutSpan[] = [{ startSec: 0, endSec: 1 }];
+    expect(removeCutAt(cuts, -1)).toEqual(cuts);
+    expect(removeCutAt(cuts, 99)).toEqual(cuts);
+  });
+});
+
+describe("applyCutsToNotes", () => {
+  test("identity when no cuts", () => {
+    const notes = [bn(0, 40), bn(1, 41)];
+    const out = applyCutsToNotes(notes, []);
+    expect(out).toEqual(notes);
+    expect(out).not.toBe(notes);
+  });
+  test("single cut: filters notes inside, shifts later by the cut duration", () => {
+    // C-E-G-A one per pulse → ripple delete G[2,3] → C(0)-E(1)-A(2).
+    const notes = [bn(0, 40), bn(1, 41), bn(2, 42), bn(3, 43)];
+    const cuts: CutSpan[] = [{ startSec: 2, endSec: 3 }];
+    const out = applyCutsToNotes(notes, cuts);
+    expect(out).toEqual([bn(0, 40), bn(1, 41), bn(2, 43)]);
+  });
+  test("sequential cuts: each cut applies in the time domain produced by prior cuts", () => {
+    // Cut 1 [2,2.5] removes G; H slides into G's slot. View becomes
+    // C(0)-E(1)-H(2)-A(2.5). Cut 2 in that domain = [2,2.5] removes
+    // H; A slides into H's slot. Final: C(0)-E(1)-A(2).
+    const notes = [bn(0, 40), bn(1, 41), bn(2, 42), bn(2.5, 44), bn(3, 43)];
+    const cuts: CutSpan[] = [
+      { startSec: 2, endSec: 2.5 },
+      { startSec: 2, endSec: 2.5 },
+    ];
+    const out = applyCutsToNotes(notes, cuts);
+    expect(out.map((n) => ({ p: n.pitch, t: n.startSec }))).toEqual([
+      { p: 40, t: 0 },
+      { p: 41, t: 1 },
+      { p: 43, t: 2 },
+    ]);
+  });
+  test("non-overlapping cuts in original time fold left correctly", () => {
+    const notes = [bn(0, 40), bn(2.5, 41), bn(5, 42), bn(8, 43)];
+    // Cut 1 [1,2] (1 s): removes nothing, shifts everything ≥ 2 back by 1.
+    // After cut 1: 0, 1.5, 4, 7.
+    // Cut 2 [6,7] (1 s) in current view: removes nothing (no note in [6,7)),
+    // shifts everything ≥ 7 back by 1. After cut 2: 0, 1.5, 4, 6.
+    const cuts: CutSpan[] = [
+      { startSec: 1, endSec: 2 },
+      { startSec: 6, endSec: 7 },
+    ];
+    const out = applyCutsToNotes(notes, cuts);
+    expect(out.map((n) => n.startSec)).toEqual([0, 1.5, 4, 6]);
+  });
+  test("preserves non-time fields verbatim (pitch, durSec, velocity)", () => {
+    const notes = [bn(3, 50)];
+    const cuts: CutSpan[] = [{ startSec: 1, endSec: 2 }];
+    const out = applyCutsToNotes(notes, cuts);
+    expect(out).toEqual([{ startSec: 2, pitch: 50, durSec: 0.25, velocity: 1 }]);
+  });
+});
+
+describe("applyNoteEditsToBass", () => {
+  test("identity when no ops", () => {
+    const notes = [bn(0, 40), bn(1, 41)];
+    const out = applyNoteEditsToBass(notes, []);
+    expect(out).toEqual(notes);
+    expect(out).not.toBe(notes);
+  });
+  test("filters notes whose id matches a delete op", () => {
+    const notes = [bn(0, 40), bn(1, 41), bn(2, 42)];
+    const out = applyNoteEditsToBass(notes, [{ kind: "delete", id: noteId(1, 41) }]);
+    expect(out.map((n) => n.pitch)).toEqual([40, 42]);
+  });
+  test("appends add ops as new bass notes", () => {
+    const notes = [bn(0, 40)];
+    const out = applyNoteEditsToBass(notes, [
+      {
+        kind: "add",
+        id: noteId(0.5, 42),
+        pitch: 42,
+        startSec: 0.5,
+        durSec: 0.25,
+        velocity: 0.8,
+        string: 0,
+        fret: 0,
+      },
+    ]);
+    expect(out.map((n) => ({ p: n.pitch, t: n.startSec, v: n.velocity }))).toEqual([
+      { p: 40, t: 0, v: 1 },
+      { p: 42, t: 0.5, v: 0.8 },
+    ]);
+  });
+  test("ignores replace ops (fingering-only, no playback effect)", () => {
+    const notes = [bn(0, 40)];
+    const out = applyNoteEditsToBass(notes, [
+      { kind: "replace", id: noteId(0, 40), string: 1, fret: 5 },
+    ]);
+    expect(out).toEqual(notes);
   });
 });
