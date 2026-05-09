@@ -225,10 +225,21 @@ function TabSurface({
   const activeIdxRef = useRef<number>(-1);
 
   const height = totalHeight(layout);
-  const bars = useMemo(
-    () => barLineTimes(beats.beats, layout.beatsPerBar),
-    [beats.beats, layout.beatsPerBar],
-  );
+  // When the song has any pre-bar-1 intro (the first detected bar
+  // doesn't start at t=0), prepend a synthetic boundary at 0 so the
+  // intro renders as a proper "bar 0" slot — full bar width, with a
+  // bar line and a "0" label — instead of the cramped 24 px gutter.
+  // `barNumberOffset` shifts the visible bar numbers down by 1 in
+  // that case so the user-detected bars keep their natural numbering
+  // (1, 2, 3, …).
+  const bars = useMemo(() => {
+    const raw = barLineTimes(beats.beats, layout.beatsPerBar);
+    return raw.length > 0 && raw[0] > 0 ? [0, ...raw] : raw;
+  }, [beats.beats, layout.beatsPerBar]);
+  const barNumberOffset = useMemo(() => {
+    const raw = barLineTimes(beats.beats, layout.beatsPerBar);
+    return raw.length > 0 && raw[0] > 0 ? 0 : 1;
+  }, [beats.beats, layout.beatsPerBar]);
   const groups = useMemo(() => beamGroups(tabNotes, beats.beats), [tabNotes, beats.beats]);
   const keyEstimate = useMemo(() => estimateKey(tabNotes), [tabNotes]);
 
@@ -975,6 +986,8 @@ function TabSurface({
               layout={layout}
               heightPx={height}
               beats={beats}
+              bars={bars}
+              barNumberOffset={barNumberOffset}
               notes={sliced[idx].sysNotes}
               groups={sliced[idx].sysGroups}
               sections={sliced[idx].sysSections}
@@ -1184,6 +1197,14 @@ interface TabSystemRowProps {
   layout: typeof DEFAULT_LAYOUT;
   heightPx: number;
   beats: BeatsPayload;
+  /**
+   * Bar-line times. May start with a synthetic 0 if the song has an
+   * intro before the first detected beat — in that case `barNumberOffset`
+   * is 0 so the prepended boundary renders as bar 0 and the real bars
+   * keep their natural numbering.
+   */
+  bars: readonly number[];
+  barNumberOffset: number;
   notes: TabNote[];
   groups: { indices: number[]; beamLevels: number }[];
   sections: {
@@ -1220,6 +1241,8 @@ function TabSystemRow({
   layout,
   heightPx,
   beats,
+  bars,
+  barNumberOffset,
   notes,
   groups,
   sections,
@@ -1248,11 +1271,10 @@ function TabSystemRow({
   // bar so a bass slide later in the bar doesn't override the root.
   const localBars = useMemo(() => {
     const out: { localX: number; barNumber: number; rootLabel: string | null }[] = [];
-    const allBars = barLineTimes(beats.beats, layout.beatsPerBar);
-    for (let i = 0; i < allBars.length; i++) {
-      const t = allBars[i];
+    for (let i = 0; i < bars.length; i++) {
+      const t = bars[i];
       if (t < system.startSec || t >= system.endSec) continue;
-      const end = i + 1 < allBars.length ? allBars[i + 1] : system.endSec;
+      const end = i + 1 < bars.length ? bars[i + 1] : system.endSec;
       const downbeatWindow = t + (end - t) * 0.25;
       let rootPitch: number | null = null;
       for (const n of notes) {
@@ -1264,12 +1286,12 @@ function TabSystemRow({
       const rootLabel = rootPitch === null ? null : pitchName(rootPitch).replace(/-?\d+$/, "");
       out.push({
         localX: rowTimeToX(system, t),
-        barNumber: i + 1,
+        barNumber: i + barNumberOffset,
         rootLabel,
       });
     }
     return out;
-  }, [beats.beats, layout, system, notes]);
+  }, [bars, barNumberOffset, system, notes]);
 
   const stemTop = stringIndexToY(0, layout) + 2;
   const stemBottom = stringIndexToY(0, layout) + STEM_LENGTH_PX;
