@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 import {
+  DEFAULT_MIXER,
   EMPTY_EDITS,
   addCut,
   addSection,
@@ -7,6 +8,7 @@ import {
   applyEdits,
   applyNoteEditsToBass,
   noteId,
+  normalizeMixerState,
   removeCutAt,
   removeSectionAt,
   tabNoteId,
@@ -326,5 +328,40 @@ describe("applyNoteEditsToBass", () => {
       { kind: "replace", id: noteId(0, 40), string: 1, fret: 5 },
     ]);
     expect(out).toEqual(notes);
+  });
+});
+
+describe("normalizeMixerState", () => {
+  test("returns null when there's no saved mixer block", () => {
+    expect(normalizeMixerState(undefined)).toBeNull();
+    expect(normalizeMixerState(null)).toBeNull();
+    expect(normalizeMixerState("not an object")).toBeNull();
+  });
+
+  test("clamps volumes into [0, 1] and falls back on non-numeric inputs", () => {
+    const out = normalizeMixerState({
+      vocals: { volume: 1.5, muted: false, soloed: false },
+      drums: { volume: -0.2, muted: false, soloed: false },
+      bass: { volume: "loud", muted: false, soloed: false },
+      other: { volume: 0.7, muted: false, soloed: false },
+      midi: { volume: 0.5, muted: false, soloed: false },
+      master: 99,
+    });
+    expect(out?.vocals.volume).toBe(1);
+    expect(out?.drums.volume).toBe(0);
+    // "loud" → fallback to DEFAULT_MIXER.bass.volume (= 1).
+    expect(out?.bass.volume).toBe(1);
+    expect(out?.other.volume).toBe(0.7);
+    expect(out?.master).toBe(1);
+  });
+
+  test("preserves valid mute / solo flags and fills in missing strips", () => {
+    const out = normalizeMixerState({
+      vocals: { volume: 0.6, muted: true, soloed: false },
+      // drums missing entirely → default
+    });
+    expect(out?.vocals).toEqual({ volume: 0.6, muted: true, soloed: false });
+    expect(out?.drums).toEqual(DEFAULT_MIXER.drums);
+    expect(out?.midi).toEqual(DEFAULT_MIXER.midi);
   });
 });

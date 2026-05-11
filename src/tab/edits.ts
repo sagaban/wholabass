@@ -81,6 +81,26 @@ export function updateSectionAt(
   return out;
 }
 
+/**
+ * Per-strip mixer state. Stored alongside the other per-song settings
+ * so each song remembers its own mute / solo / volume layout across
+ * sessions instead of resetting every time the player mounts.
+ */
+export interface MixerStripState {
+  volume: number;
+  muted: boolean;
+  soloed: boolean;
+}
+
+export interface MixerState {
+  vocals: MixerStripState;
+  drums: MixerStripState;
+  bass: MixerStripState;
+  other: MixerStripState;
+  midi: MixerStripState;
+  master: number;
+}
+
 export interface EditsFile {
   version: number;
   notes: EditOp[];
@@ -109,7 +129,27 @@ export interface EditsFile {
   midiSpeed?: number;
   /** Free-form lyrics + chord text, displayed in the side panel. */
   lyrics?: string;
+  /**
+   * Saved mixer state: per-strip volume + mute + solo flags and a
+   * master volume. Missing means the mixer hasn't been touched yet on
+   * this song — Player uses its own defaults in that case.
+   */
+  mixer?: MixerState;
 }
+
+/**
+ * Default mixer state — stems at full volume, no mute/solo, MIDI a touch
+ * lower so a freshly transcribed bass is audible without overwhelming
+ * the rest. Used as the seed when an EditsFile has no `mixer` block.
+ */
+export const DEFAULT_MIXER: MixerState = {
+  vocals: { volume: 1, muted: false, soloed: false },
+  drums: { volume: 1, muted: false, soloed: false },
+  bass: { volume: 1, muted: false, soloed: false },
+  other: { volume: 1, muted: false, soloed: false },
+  midi: { volume: 0.8, muted: false, soloed: false },
+  master: 1,
+};
 
 export const EMPTY_EDITS: EditsFile = {
   version: EDITS_VERSION,
@@ -120,6 +160,46 @@ export const EMPTY_EDITS: EditsFile = {
   midiSpeed: 1,
   lyrics: "",
 };
+
+const STRIP_KEYS = ["vocals", "drums", "bass", "other", "midi"] as const;
+
+function clamp01(n: unknown): number {
+  if (typeof n !== "number" || !Number.isFinite(n)) return 1;
+  return n < 0 ? 0 : n > 1 ? 1 : n;
+}
+
+function normalizeStrip(raw: unknown, fallback: MixerStripState): MixerStripState {
+  if (!raw || typeof raw !== "object") return { ...fallback };
+  const r = raw as Partial<MixerStripState>;
+  return {
+    volume: clamp01(r.volume ?? fallback.volume),
+    muted: typeof r.muted === "boolean" ? r.muted : fallback.muted,
+    soloed: typeof r.soloed === "boolean" ? r.soloed : fallback.soloed,
+  };
+}
+
+/**
+ * Shape-check a stored mixer block, filling in defaults for missing /
+ * out-of-range values. Returns `null` when the input is missing
+ * entirely so callers can distinguish "no saved state" from "saved
+ * defaults".
+ */
+export function normalizeMixerState(raw: unknown): MixerState | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Partial<MixerState>;
+  return {
+    vocals: normalizeStrip(r.vocals, DEFAULT_MIXER.vocals),
+    drums: normalizeStrip(r.drums, DEFAULT_MIXER.drums),
+    bass: normalizeStrip(r.bass, DEFAULT_MIXER.bass),
+    other: normalizeStrip(r.other, DEFAULT_MIXER.other),
+    midi: normalizeStrip(r.midi, DEFAULT_MIXER.midi),
+    master: clamp01(r.master ?? DEFAULT_MIXER.master),
+  };
+}
+
+// Re-exported so consumers can write `mixer.STRIP_KEYS` if they need
+// to iterate in a canonical order without redefining the literal.
+export const MIXER_STRIP_KEYS = STRIP_KEYS;
 
 /**
  * Append a cut span. Spans are stored in *sequential* order: each one

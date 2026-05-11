@@ -38,12 +38,14 @@ import {
   addSection,
   applyCutsToNotes,
   applyNoteEditsToBass,
+  normalizeMixerState,
   removeSectionAt,
   updateSectionAt,
   upsertEdit,
   type CutSpan,
   type EditOp,
   type EditsFile,
+  type MixerState,
   type SectionLabel,
 } from "@/tab/edits";
 
@@ -84,6 +86,7 @@ function normalizeEditsFile(raw: unknown): EditsFile {
           (c as CutSpan).endSec > (c as CutSpan).startSec,
       )
     : [];
+  const mixer = normalizeMixerState(r.mixer);
   return {
     version: typeof r.version === "number" ? r.version : EMPTY_EDITS.version,
     notes: Array.isArray(r.notes) ? (r.notes as EditOp[]) : [],
@@ -94,6 +97,7 @@ function normalizeEditsFile(raw: unknown): EditsFile {
     // the time mapping or produce century-long bass notes.
     midiSpeed: speedRaw > 0.1 && speedRaw < 5 ? speedRaw : 1,
     lyrics: typeof r.lyrics === "string" ? r.lyrics : "",
+    ...(mixer ? { mixer } : {}),
   };
 }
 
@@ -281,6 +285,21 @@ export function Player({ songId }: PlayerProps) {
     },
     [mutateEdits],
   );
+
+  /**
+   * Persist mixer state without pushing onto the undo stack — Cmd+Z
+   * undoing a volume slider drag isn't what the user expects, so we
+   * write directly to the edits store + ref and trip the dirty bit so
+   * the autosave still fires.
+   */
+  const onMixerChange = useCallback((next: MixerState) => {
+    const prev = editsRef.current;
+    if (prev.mixer === next) return;
+    const updated: EditsFile = { ...prev, mixer: next };
+    editsRef.current = updated;
+    editsDirtyRef.current = true;
+    setEditsState(updated);
+  }, []);
 
   /**
    * Ripple-delete: drop a `[startSec, endSec)` audio-time span from
@@ -866,7 +885,12 @@ export function Player({ songId }: PlayerProps) {
           />
 
           {engineRef.current && synthRef.current && (
-            <StemMixer engine={engineRef.current} synth={synthRef.current} />
+            <StemMixer
+              engine={engineRef.current}
+              synth={synthRef.current}
+              value={edits.mixer}
+              onChange={onMixerChange}
+            />
           )}
 
           <HStack justifyContent="flex-end" gap="2">

@@ -1,78 +1,78 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Box, Divider, Grid, HStack, styled } from "styled-system/jsx";
 import { Button, Slider } from "@/components/ui";
 import { STEM_NAMES, type StemEngine, type StemName } from "@/audio/engine";
 import { type MidiSynth } from "@/audio/midi-synth";
+import { DEFAULT_MIXER, type MixerState, type MixerStripState } from "@/tab/edits";
 
 interface StemMixerProps {
   engine: StemEngine;
   synth: MidiSynth;
-}
-
-interface StripState {
-  volume: number;
-  muted: boolean;
-  soloed: boolean;
+  /**
+   * Persisted mixer state from the parent. When undefined the mixer
+   * boots with `DEFAULT_MIXER` — used on the first session for a song,
+   * or in tests that mount the component standalone.
+   */
+  value?: MixerState;
+  /**
+   * Fires on every change. Parent stores the result in EditsFile.mixer
+   * which gets autosaved alongside the rest of per-song state.
+   */
+  onChange?: (next: MixerState) => void;
 }
 
 type Track = StemName | "midi";
 const TRACKS: readonly Track[] = [...STEM_NAMES, "midi"] as const;
 
-const INITIAL_STEM_STRIP: StripState = { volume: 1, muted: false, soloed: false };
-// MIDI starts audible (a touch lower than the stems) so a freshly
-// uploaded / transcribed bass is heard right away. The user can always
-// pull it down or mute the strip if they only want the audio mix.
-const INITIAL_MIDI_STRIP: StripState = { volume: 0.8, muted: false, soloed: false };
 const STRIP_GRID_COLS = "70px 1fr 36px 70px";
 
-function effectiveTrackGain(strip: StripState, anySoloed: boolean): number {
+function effectiveTrackGain(strip: MixerStripState, anySoloed: boolean): number {
   if (strip.muted) return 0;
   if (anySoloed && !strip.soloed) return 0;
   return Math.max(0, Math.min(1, strip.volume));
 }
 
-export function StemMixer({ engine, synth }: StemMixerProps) {
-  const [strips, setStrips] = useState<Record<Track, StripState>>({
-    vocals: INITIAL_STEM_STRIP,
-    drums: INITIAL_STEM_STRIP,
-    bass: INITIAL_STEM_STRIP,
-    other: INITIAL_STEM_STRIP,
-    midi: INITIAL_MIDI_STRIP,
-  });
-  const [master, setMaster] = useState(1);
+export function StemMixer({ engine, synth, value, onChange }: StemMixerProps) {
+  // Internal mirror of mixer state. Seeds from props on mount and on
+  // every value-prop change (e.g. song switch reloads a different
+  // saved mixer). Subsequent local changes flow through `onChange`
+  // back to the parent; React's prop-down round-trip then re-syncs
+  // via the same useEffect.
+  const [state, setState] = useState<MixerState>(value ?? DEFAULT_MIXER);
+  useEffect(() => {
+    if (value) setState(value);
+  }, [value]);
 
   // The mixer owns the gating logic so solo semantics stretch across stems
   // + the synth uniformly. We push the resulting per-track gain to the
-  // engine via setVolume (skipping its own muted/soloed bookkeeping) and
-  // to the synth via setMasterVolume.
+  // engine via setVolume (skipping its own muted/soloed bookkeeping), to
+  // the synth via setMasterVolume, and the master fader to the engine's
+  // bus gain.
   useEffect(() => {
-    const anySoloed = TRACKS.some((t) => strips[t].soloed);
+    const anySoloed = TRACKS.some((t) => state[t].soloed);
     for (const stem of STEM_NAMES) {
-      engine.setVolume(stem, effectiveTrackGain(strips[stem], anySoloed));
+      engine.setVolume(stem, effectiveTrackGain(state[stem], anySoloed));
     }
-    synth.setMasterVolume(effectiveTrackGain(strips.midi, anySoloed));
-  }, [strips, engine, synth]);
+    synth.setMasterVolume(effectiveTrackGain(state.midi, anySoloed));
+    engine.setMasterVolume(state.master);
+  }, [state, engine, synth]);
 
-  const update = (track: Track, patch: Partial<StripState>) => {
-    setStrips((s) => ({ ...s, [track]: { ...s[track], ...patch } }));
+  const commit = useCallback(
+    (next: MixerState) => {
+      setState(next);
+      onChange?.(next);
+    },
+    [onChange],
+  );
+
+  const updateStrip = (track: Track, patch: Partial<MixerStripState>) => {
+    commit({ ...state, [track]: { ...state[track], ...patch } });
   };
 
-  const onVolumeChange = (track: Track, value: number) => {
-    update(track, { volume: value });
-  };
-
-  const onToggleMute = (track: Track) => {
-    update(track, { muted: !strips[track].muted });
-  };
-
-  const onToggleSolo = (track: Track) => {
-    update(track, { soloed: !strips[track].soloed });
-  };
-
-  const onMasterChange = (value: number) => {
-    setMaster(value);
-    engine.setMasterVolume(value);
-  };
+  const onVolumeChange = (track: Track, volume: number) => updateStrip(track, { volume });
+  const onToggleMute = (track: Track) => updateStrip(track, { muted: !state[track].muted });
+  const onToggleSolo = (track: Track) => updateStrip(track, { soloed: !state[track].soloed });
+  const onMasterChange = (master: number) => commit({ ...state, master });
 
   return (
     <Box
@@ -86,13 +86,13 @@ export function StemMixer({ engine, synth }: StemMixerProps) {
       gap="2"
       width="min(540px, 100%)"
     >
-      <MasterStrip value={master} onChange={onMasterChange} />
+      <MasterStrip value={state.master} onChange={onMasterChange} />
       <Divider color="border" />
       {TRACKS.map((track) => (
         <Strip
           key={track}
           track={track}
-          state={strips[track]}
+          state={state[track]}
           onVolumeChange={(v) => onVolumeChange(track, v)}
           onToggleMute={() => onToggleMute(track)}
           onToggleSolo={() => onToggleSolo(track)}
@@ -133,7 +133,7 @@ function MasterStrip({ value, onChange }: { value: number; onChange: (v: number)
 
 interface StripProps {
   track: Track;
-  state: StripState;
+  state: MixerStripState;
   onVolumeChange: (value: number) => void;
   onToggleMute: () => void;
   onToggleSolo: () => void;
