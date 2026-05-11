@@ -82,6 +82,11 @@ pub struct Meta {
     pub duration: f64,
     pub processing_version: u32,
     pub created_at: f64,
+    /// User-assigned grouping label. None / missing → ungrouped. Stored
+    /// here (rather than in a separate registry) so the folder travels
+    /// with the song's other metadata and survives library moves.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub folder: Option<String>,
 }
 
 /// Read and parse `<root>/<id>/meta.json`. Returns None if missing or malformed.
@@ -148,6 +153,22 @@ pub fn bump_processing_version(root: &Path, id: &str, version: u32) -> std::io::
     std::fs::write(path, bytes)
 }
 
+/// Set (or clear) the song's folder label in its `meta.json`. Trims
+/// whitespace; empty strings become `None` so an "Ungrouped" rename
+/// just removes the field. No-op when the value is unchanged.
+pub fn set_folder(root: &Path, id: &str, folder: Option<&str>) -> std::io::Result<()> {
+    let mut meta = read_meta(root, id)
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "meta.json missing"))?;
+    let next = folder.map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    if meta.folder == next {
+        return Ok(());
+    }
+    meta.folder = next;
+    let path = song_dir(root, id).join("meta.json");
+    let bytes = serde_json::to_vec_pretty(&meta).map_err(std::io::Error::other)?;
+    std::fs::write(path, bytes)
+}
+
 /// True iff the cache for `id` is complete and matches the current
 /// processing version. Used to short-circuit the Demucs + transcribe +
 /// beats pipeline. A stale or partial entry returns false so it gets
@@ -176,6 +197,9 @@ pub struct LibraryEntry {
     pub has_stems: bool,
     pub has_midi: bool,
     pub has_beats: bool,
+    /// User folder grouping; `None` when the song hasn't been moved
+    /// into a folder yet.
+    pub folder: Option<String>,
 }
 
 /// List every cache entry under `root` for which a parseable `meta.json`
@@ -207,6 +231,7 @@ pub fn list(root: &Path, processing_version: u32) -> Vec<LibraryEntry> {
                 has_stems: stems,
                 has_midi: midi,
                 has_beats: beats,
+                folder: meta.folder,
             })
         })
         .collect();
@@ -383,6 +408,49 @@ mod tests {
         assert_eq!(meta.processing_version, 7);
         assert_eq!(meta.source.kind, "file");
         assert!((meta.duration - 12.34).abs() < 1e-9);
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn read_meta_treats_missing_folder_as_none() {
+        // Backward compat: pre-folder meta.json files parse cleanly.
+        let root = fresh_temp_root();
+        write_complete_cache(&root, "abc", 1);
+        let meta = read_meta(&root, "abc").expect("meta should parse");
+        assert!(meta.folder.is_none());
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn set_folder_writes_and_clears() {
+        let root = fresh_temp_root();
+        write_complete_cache(&root, "abc", 1);
+
+        // Set a folder.
+        set_folder(&root, "abc", Some("  Practice  ")).unwrap();
+        let meta = read_meta(&root, "abc").unwrap();
+        // Trims whitespace.
+        assert_eq!(meta.folder.as_deref(), Some("Practice"));
+
+        // Empty string → cleared.
+        set_folder(&root, "abc", Some("")).unwrap();
+        let meta = read_meta(&root, "abc").unwrap();
+        assert!(meta.folder.is_none());
+
+        // Setting to the same value is a silent no-op (still succeeds).
+        set_folder(&root, "abc", None).unwrap();
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn list_surfaces_folder_when_present() {
+        let root = fresh_temp_root();
+        write_complete_cache(&root, "abcdef012345", 1);
+        set_folder(&root, "abcdef012345", Some("Setlist")).unwrap();
+        let entries = list(&root, 1);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].folder.as_deref(), Some("Setlist"));
         std::fs::remove_dir_all(&root).ok();
     }
 

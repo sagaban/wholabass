@@ -378,6 +378,18 @@ async fn delete_song(song_id: String, app: AppHandle) -> Result<(), String> {
     library::delete_song(&library_root, &song_id).map_err(|e| e.to_string())
 }
 
+/// Update the folder grouping for a song. `None` clears it back to
+/// ungrouped; whitespace-only input is treated the same.
+#[tauri::command]
+async fn set_song_folder(
+    song_id: String,
+    folder: Option<String>,
+    app: AppHandle,
+) -> Result<(), String> {
+    let library_root = library::resolve_root(&app).map_err(|e| e.to_string())?;
+    library::set_folder(&library_root, &song_id, folder.as_deref()).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 async fn cancel_ingest(
     state: State<'_, AppState>,
@@ -685,6 +697,7 @@ pub fn run() {
             retry_song,
             list_library,
             delete_song,
+            set_song_folder,
             read_stem,
             read_midi,
             replace_bass_midi,

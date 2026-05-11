@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
@@ -34,6 +34,8 @@ export interface LibraryEntry {
   has_stems: boolean;
   has_midi: boolean;
   has_beats: boolean;
+  /** User-assigned folder. Missing / empty → "Ungrouped" group. */
+  folder?: string | null;
 }
 
 type SidecarStatus =
@@ -262,37 +264,43 @@ export function LibraryScreen() {
       )}
 
       {!listError && entries !== null && entries.length > 0 && (
-        <Stack gap="1.5">
-          {entries.map((entry) => (
-            <LibraryRow
-              key={entry.song_id}
-              entry={entry}
-              busy={ingest.kind === "running"}
-              onOpen={() =>
-                void navigate({
-                  to: "/play/$songId",
-                  params: { songId: entry.song_id },
-                  search: { title: entry.title },
-                })
-              }
-              onRetry={() => {
-                if (ingestingRef.current) return;
-                void runRetry(entry.song_id, setIngest, ingestingRef, (result) => {
-                  setRefreshKey((k) => k + 1);
-                  void navigate({
-                    to: "/play/$songId",
-                    params: { songId: result.song_id },
-                    search: { title: result.title },
-                  });
-                });
-              }}
-              onDelete={() => {
-                setDeleteError(null);
-                setPendingDelete(entry);
-              }}
-            />
-          ))}
-        </Stack>
+        <LibraryGroupedList
+          entries={entries}
+          busy={ingest.kind === "running"}
+          onOpen={(entry) =>
+            void navigate({
+              to: "/play/$songId",
+              params: { songId: entry.song_id },
+              search: { title: entry.title },
+            })
+          }
+          onRetry={(entry) => {
+            if (ingestingRef.current) return;
+            void runRetry(entry.song_id, setIngest, ingestingRef, (result) => {
+              setRefreshKey((k) => k + 1);
+              void navigate({
+                to: "/play/$songId",
+                params: { songId: result.song_id },
+                search: { title: result.title },
+              });
+            });
+          }}
+          onDelete={(entry) => {
+            setDeleteError(null);
+            setPendingDelete(entry);
+          }}
+          onMoveToFolder={async (entry, folder) => {
+            try {
+              await invoke<void>("set_song_folder", {
+                songId: entry.song_id,
+                folder,
+              });
+              setRefreshKey((k) => k + 1);
+            } catch (err: unknown) {
+              setListError(String(err));
+            }
+          }}
+        />
       )}
 
       <ConfirmDeleteDialog
@@ -365,18 +373,160 @@ async function runIngest(
   }
 }
 
-function LibraryRow({
-  entry,
+const UNGROUPED_KEY = "__ungrouped__";
+
+interface GroupedListProps {
+  entries: LibraryEntry[];
+  busy: boolean;
+  onOpen: (entry: LibraryEntry) => void;
+  onRetry: (entry: LibraryEntry) => void;
+  onDelete: (entry: LibraryEntry) => void;
+  onMoveToFolder: (entry: LibraryEntry, folder: string | null) => void;
+}
+
+/**
+ * Groups `entries` by their `folder` and renders each group under a
+ * collapsible header. The "Ungrouped" bucket goes last so named
+ * folders surface first. Group state (collapsed/open) is in-memory
+ * only — refreshing the page resets it.
+ */
+function LibraryGroupedList({
+  entries,
   busy,
   onOpen,
   onRetry,
   onDelete,
+  onMoveToFolder,
+}: GroupedListProps) {
+  // Distinct folder names, alphabetised; ungrouped is its own bucket.
+  const { groups, allFolders } = useMemo(() => {
+    const map = new Map<string, LibraryEntry[]>();
+    const folderSet = new Set<string>();
+    for (const entry of entries) {
+      const key = entry.folder?.trim() || UNGROUPED_KEY;
+      if (entry.folder?.trim()) folderSet.add(entry.folder.trim());
+      const bucket = map.get(key);
+      if (bucket) bucket.push(entry);
+      else map.set(key, [entry]);
+    }
+    // Sorted folders first, then ungrouped at the end.
+    const ordered: { key: string; label: string; items: LibraryEntry[] }[] = [];
+    const sortedFolders = [...folderSet].toSorted((a, b) => a.localeCompare(b));
+    for (const name of sortedFolders) {
+      ordered.push({ key: name, label: name, items: map.get(name) ?? [] });
+    }
+    const ungrouped = map.get(UNGROUPED_KEY);
+    if (ungrouped && ungrouped.length > 0) {
+      ordered.push({ key: UNGROUPED_KEY, label: "Ungrouped", items: ungrouped });
+    }
+    return { groups: ordered, allFolders: sortedFolders };
+  }, [entries]);
+
+  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
+  const toggle = (key: string) =>
+    setCollapsed((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+
+  // Only one group + everything ungrouped → don't bother with a header,
+  // the list collapses to the original flat presentation.
+  if (groups.length === 1 && groups[0].key === UNGROUPED_KEY) {
+    return (
+      <Stack gap="1.5">
+        {groups[0].items.map((entry) => (
+          <LibraryRow
+            key={entry.song_id}
+            entry={entry}
+            busy={busy}
+            allFolders={allFolders}
+            onOpen={() => onOpen(entry)}
+            onRetry={() => onRetry(entry)}
+            onDelete={() => onDelete(entry)}
+            onMoveToFolder={(folder) => onMoveToFolder(entry, folder)}
+          />
+        ))}
+      </Stack>
+    );
+  }
+
+  return (
+    <Stack gap="4">
+      {groups.map((group) => {
+        const isCollapsed = collapsed.has(group.key);
+        return (
+          <Stack key={group.key} gap="1.5">
+            <styled.button
+              type="button"
+              onClick={() => toggle(group.key)}
+              display="flex"
+              alignItems="center"
+              gap="2"
+              bg="transparent"
+              border="0"
+              p="0"
+              cursor="pointer"
+              fontSize="sm"
+              fontWeight="semibold"
+              color="inherit"
+              aria-expanded={!isCollapsed}
+              opacity={group.key === UNGROUPED_KEY ? 0.7 : 1}
+            >
+              <styled.span
+                display="inline-block"
+                width="3"
+                textAlign="center"
+                opacity="0.7"
+                fontSize="xs"
+              >
+                {isCollapsed ? "▸" : "▾"}
+              </styled.span>
+              {group.label}
+              <styled.span fontSize="xs" opacity="0.5" fontWeight="normal">
+                ({group.items.length})
+              </styled.span>
+            </styled.button>
+            {!isCollapsed && (
+              <Stack gap="1.5">
+                {group.items.map((entry) => (
+                  <LibraryRow
+                    key={entry.song_id}
+                    entry={entry}
+                    busy={busy}
+                    allFolders={allFolders}
+                    onOpen={() => onOpen(entry)}
+                    onRetry={() => onRetry(entry)}
+                    onDelete={() => onDelete(entry)}
+                    onMoveToFolder={(folder) => onMoveToFolder(entry, folder)}
+                  />
+                ))}
+              </Stack>
+            )}
+          </Stack>
+        );
+      })}
+    </Stack>
+  );
+}
+
+function LibraryRow({
+  entry,
+  busy,
+  allFolders,
+  onOpen,
+  onRetry,
+  onDelete,
+  onMoveToFolder,
 }: {
   entry: LibraryEntry;
   busy: boolean;
+  allFolders: readonly string[];
   onOpen: () => void;
   onRetry: () => void;
   onDelete: () => void;
+  onMoveToFolder: (folder: string | null) => void;
 }) {
   const canRetry = !entry.ready && entry.has_source;
   return (
@@ -406,6 +556,12 @@ function LibraryRow({
         )}
       </VStack>
       <HStack gap="2">
+        <FolderPicker
+          current={entry.folder ?? null}
+          allFolders={allFolders}
+          onChange={onMoveToFolder}
+          songTitle={entry.title}
+        />
         {entry.ready ? (
           <Button size="sm" onClick={onOpen}>
             Open
@@ -425,6 +581,95 @@ function LibraryRow({
         </Button>
       </HStack>
     </HStack>
+  );
+}
+
+/**
+ * Inline folder picker. Native `<select>` populated from `allFolders`,
+ * plus an "Ungrouped" option and a "New folder…" option that flips to
+ * a text input. Native dropdown to keep keyboard / a11y trivial and
+ * avoid pulling in a heavier Ark control for one-off use.
+ */
+function FolderPicker({
+  current,
+  allFolders,
+  onChange,
+  songTitle,
+}: {
+  current: string | null;
+  allFolders: readonly string[];
+  onChange: (folder: string | null) => void;
+  songTitle: string;
+}) {
+  const [creating, setCreating] = useState(false);
+  const [draft, setDraft] = useState("");
+
+  if (creating) {
+    const commit = () => {
+      const trimmed = draft.trim();
+      setCreating(false);
+      setDraft("");
+      if (trimmed) onChange(trimmed);
+    };
+    return (
+      <styled.input
+        // oxlint-disable-next-line jsx-a11y/no-autofocus
+        autoFocus
+        value={draft}
+        onChange={(e) => setDraft(e.currentTarget.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") commit();
+          if (e.key === "Escape") {
+            setCreating(false);
+            setDraft("");
+          }
+        }}
+        placeholder="folder name"
+        aria-label={`folder name for ${songTitle}`}
+        width="32"
+        px="2"
+        py="1"
+        borderWidth="1px"
+        borderColor="border"
+        borderRadius="l1"
+        bg="canvas"
+        fontSize="xs"
+      />
+    );
+  }
+
+  return (
+    <styled.select
+      value={current ?? ""}
+      onChange={(e) => {
+        const value = e.currentTarget.value;
+        if (value === "__new__") {
+          setCreating(true);
+        } else if (value === "") {
+          onChange(null);
+        } else {
+          onChange(value);
+        }
+      }}
+      aria-label={`folder for ${songTitle}`}
+      fontSize="xs"
+      px="1.5"
+      py="1"
+      borderWidth="1px"
+      borderColor="border"
+      borderRadius="l1"
+      bg="canvas"
+      maxWidth="32"
+    >
+      <option value="">— ungrouped —</option>
+      {allFolders.map((name) => (
+        <option key={name} value={name}>
+          {name}
+        </option>
+      ))}
+      <option value="__new__">+ new folder…</option>
+    </styled.select>
   );
 }
 
