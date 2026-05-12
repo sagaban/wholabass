@@ -318,6 +318,26 @@ export function Player({ songId }: PlayerProps) {
   );
 
   const [lyricsOpen, setLyricsOpen] = useState(false);
+  // Width of the lyrics column on lg screens; persisted to
+  // localStorage so the user's preferred width sticks across sessions.
+  // Clamped to [240, 720] on read so a corrupt entry can't render an
+  // unusable layout.
+  const [lyricsWidth, setLyricsWidthState] = useState<number>(() => {
+    if (typeof window === "undefined") return 320;
+    const raw = window.localStorage.getItem("wholabass.lyricsWidth");
+    const parsed = raw ? Number.parseInt(raw, 10) : 320;
+    return Number.isFinite(parsed) ? Math.max(240, Math.min(720, parsed)) : 320;
+  });
+  const setLyricsWidth = useCallback((next: number) => {
+    const clamped = Math.max(240, Math.min(720, Math.round(next)));
+    setLyricsWidthState(clamped);
+    try {
+      window.localStorage.setItem("wholabass.lyricsWidth", String(clamped));
+    } catch {
+      // localStorage unavailable (private mode, sandboxing) — width
+      // just won't persist; not worth surfacing.
+    }
+  }, []);
 
   /**
    * Auto-match heuristic. Reads the song's beats.json for the
@@ -417,7 +437,10 @@ export function Player({ songId }: PlayerProps) {
   );
 
   // Load + autosave the edits overlay alongside stems. Loads bypass
-  // the history (a song change isn't an undoable action).
+  // the history (a song change isn't an undoable action). On load,
+  // also seed the lyrics-panel toggle: if the song already has lyrics
+  // saved, the panel auto-opens; subsequent Show/Hide clicks stick
+  // until the next song change.
   useEffect(() => {
     let cancelled = false;
     editsDirtyRef.current = false;
@@ -425,9 +448,14 @@ export function Player({ songId }: PlayerProps) {
       try {
         const raw = await invoke<unknown>("read_edits", { songId });
         if (cancelled) return;
-        replaceEditsNoHistory(normalizeEditsFile(raw));
+        const next = normalizeEditsFile(raw);
+        replaceEditsNoHistory(next);
+        setLyricsOpen(!!next.lyrics?.trim());
       } catch {
-        if (!cancelled) replaceEditsNoHistory(EMPTY_EDITS);
+        if (!cancelled) {
+          replaceEditsNoHistory(EMPTY_EDITS);
+          setLyricsOpen(false);
+        }
       }
     })();
     return () => {
@@ -734,11 +762,14 @@ export function Player({ songId }: PlayerProps) {
     <Grid
       mt="5"
       gap="6"
+      // The dynamic lyrics-column width flows through a CSS variable
+      // because Panda only extracts responsive variants (`lg: "..."`)
+      // from static strings — a template literal there silently drops
+      // the lg rule and the layout collapses to base / 1fr.
+      style={{ ["--lyrics-w" as string]: `${lyricsWidth}px` }}
       gridTemplateColumns={{
         base: "1fr",
-        lg: lyricsOpen
-          ? "minmax(320px, 380px) 1fr minmax(280px, 360px)"
-          : "minmax(320px, 380px) 1fr",
+        lg: lyricsOpen ? "minmax(320px, 380px) 1fr var(--lyrics-w)" : "minmax(320px, 380px) 1fr",
       }}
       alignItems="start"
       w="full"
@@ -929,6 +960,8 @@ export function Player({ songId }: PlayerProps) {
             value={edits.lyrics ?? ""}
             onChange={onSetLyrics}
             onClose={() => setLyricsOpen(false)}
+            width={lyricsWidth}
+            onResize={setLyricsWidth}
           />
         </GridItem>
       )}
@@ -1565,6 +1598,10 @@ interface LyricsPanelProps {
   value: string;
   onChange: (next: string) => void;
   onClose: () => void;
+  /** Current panel width in pixels (drives the parent grid column). */
+  width: number;
+  /** Called with the proposed new width while the user drags the handle. */
+  onResize: (next: number) => void;
 }
 
 /**
@@ -1575,9 +1612,11 @@ interface LyricsPanelProps {
  *
  * Edit/display split keeps formatting (alignment of chords above
  * syllables) intact while reading: the textarea uses the same
- * monospace font as the display so the column widths match.
+ * monospace font as the display so the column widths match. A
+ * drag-handle on the left edge resizes the grid column live; the
+ * parent persists the chosen width to localStorage.
  */
-function LyricsPanel({ value, onChange, onClose }: LyricsPanelProps) {
+function LyricsPanel({ value, onChange, onClose, width, onResize }: LyricsPanelProps) {
   const [editing, setEditing] = useState(value.length === 0);
   const [draft, setDraft] = useState(value);
   useEffect(() => {
@@ -1589,8 +1628,30 @@ function LyricsPanel({ value, onChange, onClose }: LyricsPanelProps) {
     setEditing(false);
   };
 
+  // Drag-resize on the left edge. We capture the pointer so the drag
+  // continues even when the cursor temporarily leaves the handle, and
+  // we listen on window so the mouseup always fires.
+  const beginResize = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    const startX = e.clientX;
+    const startWidth = width;
+    const onMove = (ev: MouseEvent) => {
+      // Dragging the left edge: moving left grows the panel (cursor x
+      // decreases → delta becomes positive width).
+      onResize(startWidth + (startX - ev.clientX));
+    };
+    const onUp = () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  };
+
   return (
     <Box
+      position="relative"
       p="3"
       borderWidth="1px"
       borderColor="border"
@@ -1600,6 +1661,21 @@ function LyricsPanel({ value, onChange, onClose }: LyricsPanelProps) {
       gap="2"
       height="calc(100vh - 240px)"
     >
+      {/* oxlint-disable-next-line jsx-a11y/no-static-element-interactions */}
+      <Box
+        onMouseDown={beginResize}
+        position="absolute"
+        left="-3"
+        top="0"
+        bottom="0"
+        width="2"
+        cursor="ew-resize"
+        bg="transparent"
+        _hover={{ bg: "border" }}
+        role="separator"
+        aria-label="resize lyrics panel"
+        aria-orientation="vertical"
+      />
       <HStack justifyContent="space-between" alignItems="center">
         <styled.div fontSize="sm" fontWeight="semibold">
           Lyrics
