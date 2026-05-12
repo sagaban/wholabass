@@ -384,11 +384,37 @@ interface GroupedListProps {
   onMoveToFolder: (entry: LibraryEntry, folder: string | null) => void;
 }
 
+const COLLAPSED_STORAGE_KEY = "wholabass.library.collapsedFolders";
+
+/** Read the persisted collapsed-folder set from localStorage. */
+function loadCollapsedFolders(): Set<string> {
+  if (typeof window === "undefined") return new Set();
+  try {
+    const raw = window.localStorage.getItem(COLLAPSED_STORAGE_KEY);
+    if (!raw) return new Set();
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return new Set();
+    return new Set(parsed.filter((v): v is string => typeof v === "string"));
+  } catch {
+    return new Set();
+  }
+}
+
+/** Persist the collapsed-folder set. Silently no-ops on storage errors. */
+function saveCollapsedFolders(set: Set<string>): void {
+  try {
+    window.localStorage.setItem(COLLAPSED_STORAGE_KEY, JSON.stringify([...set]));
+  } catch {
+    // localStorage unavailable (private mode, sandboxing) — collapse
+    // state just won't persist; not worth surfacing.
+  }
+}
+
 /**
  * Groups `entries` by their `folder` and renders each group under a
  * collapsible header. The "Ungrouped" bucket goes last so named
- * folders surface first. Group state (collapsed/open) is in-memory
- * only — refreshing the page resets it.
+ * folders surface first. Collapsed/open state persists across
+ * sessions via localStorage (keyed by folder name).
  */
 function LibraryGroupedList({
   entries,
@@ -422,12 +448,13 @@ function LibraryGroupedList({
     return { groups: ordered, allFolders: sortedFolders };
   }, [entries]);
 
-  const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
+  const [collapsed, setCollapsed] = useState<Set<string>>(loadCollapsedFolders);
   const toggle = (key: string) =>
     setCollapsed((prev) => {
       const next = new Set(prev);
       if (next.has(key)) next.delete(key);
       else next.add(key);
+      saveCollapsedFolders(next);
       return next;
     });
 
