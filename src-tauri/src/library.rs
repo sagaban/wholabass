@@ -169,6 +169,28 @@ pub fn set_folder(root: &Path, id: &str, folder: Option<&str>) -> std::io::Resul
     std::fs::write(path, bytes)
 }
 
+/// Rename the song in its `meta.json`. Trims whitespace and rejects
+/// empty input (a song needs *some* title for the library list to
+/// keep rendering it). No-op when the value is unchanged.
+pub fn set_title(root: &Path, id: &str, title: &str) -> std::io::Result<()> {
+    let trimmed = title.trim();
+    if trimmed.is_empty() {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "title cannot be empty",
+        ));
+    }
+    let mut meta = read_meta(root, id)
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "meta.json missing"))?;
+    if meta.title == trimmed {
+        return Ok(());
+    }
+    meta.title = trimmed.to_string();
+    let path = song_dir(root, id).join("meta.json");
+    let bytes = serde_json::to_vec_pretty(&meta).map_err(std::io::Error::other)?;
+    std::fs::write(path, bytes)
+}
+
 /// True iff the cache for `id` is complete and matches the current
 /// processing version. Used to short-circuit the Demucs + transcribe +
 /// beats pipeline. A stale or partial entry returns false so it gets
@@ -439,6 +461,26 @@ mod tests {
 
         // Setting to the same value is a silent no-op (still succeeds).
         set_folder(&root, "abc", None).unwrap();
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    #[test]
+    fn set_title_trims_writes_and_rejects_empty() {
+        let root = fresh_temp_root();
+        write_complete_cache(&root, "abc", 1);
+
+        // Trims whitespace.
+        set_title(&root, "abc", "  New Title  ").unwrap();
+        let meta = read_meta(&root, "abc").unwrap();
+        assert_eq!(meta.title, "New Title");
+
+        // No-op when unchanged.
+        set_title(&root, "abc", "New Title").unwrap();
+
+        // Empty / whitespace-only is rejected.
+        let err = set_title(&root, "abc", "   ").unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
 
         std::fs::remove_dir_all(&root).ok();
     }

@@ -390,6 +390,14 @@ async fn set_song_folder(
     library::set_folder(&library_root, &song_id, folder.as_deref()).map_err(|e| e.to_string())
 }
 
+/// Rename a song. Empty / whitespace-only titles are rejected by the
+/// library layer.
+#[tauri::command]
+async fn set_song_title(song_id: String, title: String, app: AppHandle) -> Result<(), String> {
+    let library_root = library::resolve_root(&app).map_err(|e| e.to_string())?;
+    library::set_title(&library_root, &song_id, &title).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 async fn cancel_ingest(
     state: State<'_, AppState>,
@@ -698,6 +706,7 @@ pub fn run() {
             list_library,
             delete_song,
             set_song_folder,
+            set_song_title,
             read_stem,
             read_midi,
             replace_bass_midi,

@@ -300,6 +300,17 @@ export function LibraryScreen() {
               setListError(String(err));
             }
           }}
+          onRename={async (entry, title) => {
+            try {
+              await invoke<void>("set_song_title", {
+                songId: entry.song_id,
+                title,
+              });
+              setRefreshKey((k) => k + 1);
+            } catch (err: unknown) {
+              setListError(String(err));
+            }
+          }}
         />
       )}
 
@@ -382,6 +393,7 @@ interface GroupedListProps {
   onRetry: (entry: LibraryEntry) => void;
   onDelete: (entry: LibraryEntry) => void;
   onMoveToFolder: (entry: LibraryEntry, folder: string | null) => void;
+  onRename: (entry: LibraryEntry, title: string) => void;
 }
 
 const COLLAPSED_STORAGE_KEY = "wholabass.library.collapsedFolders";
@@ -423,6 +435,7 @@ function LibraryGroupedList({
   onRetry,
   onDelete,
   onMoveToFolder,
+  onRename,
 }: GroupedListProps) {
   // Distinct folder names, alphabetised; ungrouped is its own bucket.
   const { groups, allFolders } = useMemo(() => {
@@ -473,6 +486,7 @@ function LibraryGroupedList({
             onRetry={() => onRetry(entry)}
             onDelete={() => onDelete(entry)}
             onMoveToFolder={(folder) => onMoveToFolder(entry, folder)}
+            onRename={(title) => onRename(entry, title)}
           />
         ))}
       </Stack>
@@ -527,6 +541,7 @@ function LibraryGroupedList({
                     onRetry={() => onRetry(entry)}
                     onDelete={() => onDelete(entry)}
                     onMoveToFolder={(folder) => onMoveToFolder(entry, folder)}
+                    onRename={(title) => onRename(entry, title)}
                   />
                 ))}
               </Stack>
@@ -538,6 +553,77 @@ function LibraryGroupedList({
   );
 }
 
+/**
+ * Click-to-edit song title. Renders as plain text until clicked, then
+ * swaps to a text input. Enter / blur commits, Escape reverts. Empty
+ * input is rejected silently — the row falls back to the previous
+ * title and the backend never sees an empty string.
+ */
+function EditableTitle({ value, onChange }: { value: string; onChange: (next: string) => void }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(value);
+  useEffect(() => {
+    setDraft(value);
+  }, [value]);
+
+  const commit = () => {
+    const trimmed = draft.trim();
+    setEditing(false);
+    if (trimmed && trimmed !== value) {
+      onChange(trimmed);
+    } else {
+      setDraft(value);
+    }
+  };
+
+  if (editing) {
+    return (
+      <styled.input
+        // oxlint-disable-next-line jsx-a11y/no-autofocus
+        autoFocus
+        value={draft}
+        onChange={(e) => setDraft(e.currentTarget.value)}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") commit();
+          else if (e.key === "Escape") {
+            setDraft(value);
+            setEditing(false);
+          }
+        }}
+        aria-label={`rename ${value}`}
+        fontWeight="medium"
+        fontSize="md"
+        px="1"
+        py="0"
+        borderWidth="1px"
+        borderColor="border"
+        borderRadius="l1"
+        bg="canvas"
+        minWidth="60"
+      />
+    );
+  }
+  return (
+    <styled.button
+      type="button"
+      onClick={() => setEditing(true)}
+      bg="transparent"
+      border="0"
+      p="0"
+      cursor="text"
+      fontWeight="medium"
+      fontSize="md"
+      textAlign="left"
+      color="inherit"
+      aria-label={`rename ${value}`}
+      _hover={{ textDecoration: "underline" }}
+    >
+      {value}
+    </styled.button>
+  );
+}
+
 function LibraryRow({
   entry,
   busy,
@@ -546,6 +632,7 @@ function LibraryRow({
   onRetry,
   onDelete,
   onMoveToFolder,
+  onRename,
 }: {
   entry: LibraryEntry;
   busy: boolean;
@@ -554,6 +641,7 @@ function LibraryRow({
   onRetry: () => void;
   onDelete: () => void;
   onMoveToFolder: (folder: string | null) => void;
+  onRename: (title: string) => void;
 }) {
   const canRetry = !entry.ready && entry.has_source;
   return (
@@ -568,7 +656,7 @@ function LibraryRow({
       opacity={entry.ready ? 1 : 0.85}
     >
       <VStack alignItems="flex-start" gap="1">
-        <styled.div fontWeight="medium">{entry.title}</styled.div>
+        <EditableTitle value={entry.title} onChange={onRename} />
         <styled.div fontSize="xs" opacity="0.7">
           <styled.code>{entry.song_id}</styled.code> · {fmtTime(entry.duration_sec)} · v
           {entry.processing_version}
