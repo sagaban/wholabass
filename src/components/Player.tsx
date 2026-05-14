@@ -258,6 +258,25 @@ export function Player({ songId }: PlayerProps) {
     [mutateEdits],
   );
 
+  const onResizeSectionAt = useCallback(
+    (index: number, patch: { startSec?: number; endSec?: number }) => {
+      mutateEdits((prev) => {
+        const cur = prev.sections[index];
+        if (!cur) return prev;
+        const startSec = patch.startSec ?? cur.startSec;
+        const endSec = patch.endSec ?? cur.endSec;
+        if (!Number.isFinite(startSec) || !Number.isFinite(endSec)) return prev;
+        if (startSec < 0 || endSec <= startSec) return prev;
+        if (startSec === cur.startSec && endSec === cur.endSec) return prev;
+        return {
+          ...prev,
+          sections: updateSectionAt(prev.sections, index, { startSec, endSec }),
+        };
+      });
+    },
+    [mutateEdits],
+  );
+
   const onSetMidiOffset = useCallback(
     (offsetSec: number) => {
       mutateEdits((prev) => ({ ...prev, midiOffsetSec: offsetSec }));
@@ -949,6 +968,7 @@ export function Player({ songId }: PlayerProps) {
             onEdit={onEdit}
             transact={transact}
             onRemoveSectionAt={onRemoveSectionAt}
+            onResizeSectionAt={onResizeSectionAt}
             onRippleDelete={onRippleDelete}
           />
         )}

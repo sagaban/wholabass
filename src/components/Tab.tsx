@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Box, HStack, styled } from "styled-system/jsx";
+import { Box, HStack, styled, VStack } from "styled-system/jsx";
 import { css } from "styled-system/css";
 import { type StemEngine } from "@/audio/engine";
 import { estimateKey } from "@/audio/key";
@@ -50,6 +50,7 @@ interface TabProps {
    */
   transact: (fn: () => void) => void;
   onRemoveSectionAt: (index: number) => void;
+  onResizeSectionAt: (index: number, patch: { startSec?: number; endSec?: number }) => void;
   /** Ripple-delete a `[startSec, endSec)` audio-time span. */
   onRippleDelete: (span: CutSpan) => void;
 }
@@ -70,6 +71,7 @@ export function Tab({
   onEdit,
   transact,
   onRemoveSectionAt,
+  onResizeSectionAt,
   onRippleDelete,
 }: TabProps) {
   const [mappedBass, setMappedBass] = useState<readonly BassNote[]>([]);
@@ -148,6 +150,7 @@ export function Tab({
       onEdit={onEdit}
       transact={transact}
       onRemoveSectionAt={onRemoveSectionAt}
+      onResizeSectionAt={onResizeSectionAt}
       onRippleDelete={onRippleDelete}
     />
   );
@@ -162,6 +165,7 @@ interface TabSurfaceProps {
   onEdit: (op: EditOp) => void;
   transact: (fn: () => void) => void;
   onRemoveSectionAt: (index: number) => void;
+  onResizeSectionAt: (index: number, patch: { startSec?: number; endSec?: number }) => void;
   onRippleDelete: (span: CutSpan) => void;
 }
 
@@ -178,6 +182,7 @@ const STEM_LENGTH_PX = 14;
 const FLAG_LENGTH_PX = 5;
 const FLAG_GAP_PX = 3;
 const SECTION_BAND_HEIGHT_PX = 16;
+const SECTION_HANDLE_W = 6;
 const ADD_NOTE_FRETS = Array.from({ length: 13 }, (_, i) => i);
 
 /** Closest tab string index for a y in SVG coordinates. */
@@ -216,6 +221,7 @@ function TabSurface({
   onEdit,
   transact,
   onRemoveSectionAt,
+  onResizeSectionAt,
   onRippleDelete,
 }: TabSurfaceProps) {
   const layout = DEFAULT_LAYOUT;
@@ -1025,6 +1031,11 @@ function TabSurface({
                 onRemoveSectionAt(selectedSectionIdx);
                 closeSection();
               }}
+              onResizeSection={(patch) => {
+                if (selectedSectionIdx === null) return;
+                onResizeSectionAt(selectedSectionIdx, patch);
+              }}
+              durationSec={durationSec}
               onNoteMouseDown={beginDrag}
               onPickSection={setSelectedSectionIdx}
               onStaffMouseDown={(e) => beginStaffMouseDown(e, idx)}
@@ -1227,6 +1238,8 @@ interface TabSystemRowProps {
   onCloseSection: () => void;
   onAddNote: (string: number, fret: number) => void;
   onDeleteSection: () => void;
+  onResizeSection: (patch: { startSec?: number; endSec?: number }) => void;
+  durationSec: number;
   onNoteMouseDown: (e: React.MouseEvent<SVGElement>, note: TabNote) => void;
   onPickSection: (idx: number) => void;
   onStaffMouseDown: (e: React.MouseEvent<SVGElement>) => void;
@@ -1257,6 +1270,8 @@ function TabSystemRow({
   onCloseSection,
   onAddNote,
   onDeleteSection,
+  onResizeSection,
+  durationSec,
   onNoteMouseDown,
   onPickSection,
   onStaffMouseDown,
@@ -1315,16 +1330,46 @@ function TabSystemRow({
           const isSelected = selectedSectionIdx === s.sectionIdx;
           const showLabel = s.startsHere;
           const labelText = s.repeats && s.repeats > 1 ? `${s.name} ×${s.repeats}` : s.name;
+          // Drag handles render only on the row that owns each edge —
+          // cross-row resize goes through the numeric inputs in the popover.
+          const startsHere = s.startsHere;
+          const endsHere = s.fullSection.endSec <= system.endSec;
+          const beginResize =
+            (edge: "start" | "end") => (ev: React.PointerEvent<SVGRectElement>) => {
+              ev.stopPropagation();
+              ev.preventDefault();
+              const handle = ev.currentTarget;
+              const svg = handle.ownerSVGElement;
+              if (!svg) return;
+              handle.setPointerCapture(ev.pointerId);
+              const MIN_GAP = 0.01;
+              const anchorStart = s.fullSection.startSec;
+              const anchorEnd = s.fullSection.endSec;
+              const onMove = (e: PointerEvent) => {
+                const rect = svg.getBoundingClientRect();
+                const localX = e.clientX - rect.left;
+                const rawT = rowXToTime(system, localX);
+                if (edge === "start") {
+                  const next = Math.max(0, Math.min(rawT, anchorEnd - MIN_GAP));
+                  onResizeSection({ startSec: next });
+                } else {
+                  const max = durationSec > 0 ? durationSec : rawT;
+                  const next = Math.max(anchorStart + MIN_GAP, Math.min(rawT, max));
+                  onResizeSection({ endSec: next });
+                }
+              };
+              const onUp = (e: PointerEvent) => {
+                handle.releasePointerCapture(e.pointerId);
+                handle.removeEventListener("pointermove", onMove);
+                handle.removeEventListener("pointerup", onUp);
+                handle.removeEventListener("pointercancel", onUp);
+              };
+              handle.addEventListener("pointermove", onMove);
+              handle.addEventListener("pointerup", onUp);
+              handle.addEventListener("pointercancel", onUp);
+            };
           return (
-            <g
-              key={`sec-${s.sectionIdx}-${x1.toFixed(2)}`}
-              onClick={(ev) => {
-                ev.stopPropagation();
-                ev.preventDefault();
-                onPickSection(s.sectionIdx);
-              }}
-              className={css({ cursor: "pointer" })}
-            >
+            <g key={`sec-${s.sectionIdx}`}>
               <rect
                 x={x1}
                 y={2}
@@ -1334,6 +1379,12 @@ function TabSystemRow({
                 fill={isSelected ? "var(--colors-indigo-4)" : "var(--colors-indigo-3)"}
                 stroke="var(--colors-indigo-7)"
                 strokeWidth={1}
+                onClick={(ev) => {
+                  ev.stopPropagation();
+                  ev.preventDefault();
+                  onPickSection(s.sectionIdx);
+                }}
+                className={css({ cursor: "pointer" })}
               />
               {showLabel && (
                 <text
@@ -1342,9 +1393,46 @@ function TabSystemRow({
                   fontSize="11"
                   fontWeight="600"
                   fill="var(--colors-indigo-11)"
+                  pointerEvents="none"
                 >
                   {labelText}
                 </text>
+              )}
+              {isSelected && startsHere && (
+                <rect
+                  x={x1 - SECTION_HANDLE_W / 2}
+                  y={2}
+                  width={SECTION_HANDLE_W}
+                  height={SECTION_BAND_HEIGHT_PX}
+                  rx={1}
+                  fill="var(--colors-indigo-9)"
+                  className={css({ cursor: "ew-resize" })}
+                  onPointerDown={beginResize("start")}
+                  onClick={(ev) => {
+                    ev.stopPropagation();
+                    ev.preventDefault();
+                  }}
+                  data-section-handle=""
+                  aria-label="drag to change section start"
+                />
+              )}
+              {isSelected && endsHere && (
+                <rect
+                  x={x2 - SECTION_HANDLE_W / 2}
+                  y={2}
+                  width={SECTION_HANDLE_W}
+                  height={SECTION_BAND_HEIGHT_PX}
+                  rx={1}
+                  fill="var(--colors-indigo-9)"
+                  className={css({ cursor: "ew-resize" })}
+                  onPointerDown={beginResize("end")}
+                  onClick={(ev) => {
+                    ev.stopPropagation();
+                    ev.preventDefault();
+                  }}
+                  data-section-handle=""
+                  aria-label="drag to change section end"
+                />
               )}
             </g>
           );
@@ -1558,11 +1646,13 @@ function TabSystemRow({
       {addTarget && <AddNotePopover target={addTarget} onAdd={onAddNote} onClose={onCloseAdd} />}
 
       {selectedSection && selectedSectionIdx !== null && (
-        <SectionDeletePopover
+        <SectionEditPopover
           section={selectedSection}
           anchorX={rowTimeToX(system, selectedSection.startSec)}
           anchorY={2}
+          durationSec={durationSec}
           onDelete={onDeleteSection}
+          onResize={onResizeSection}
           onClose={onCloseSection}
         />
       )}
@@ -1626,26 +1716,71 @@ function AddNotePopover({ target, onAdd, onClose }: AddNotePopoverProps) {
   );
 }
 
-interface SectionDeletePopoverProps {
+interface SectionEditPopoverProps {
   section: SectionLabel;
   anchorX: number;
   anchorY: number;
+  durationSec: number;
   onDelete: () => void;
+  onResize: (patch: { startSec?: number; endSec?: number }) => void;
   onClose: () => void;
 }
 
-function SectionDeletePopover({
+function SectionEditPopover({
   section,
   anchorX,
   anchorY,
+  durationSec,
   onDelete,
+  onResize,
   onClose,
-}: SectionDeletePopoverProps) {
+}: SectionEditPopoverProps) {
+  // Mirror the live section bounds so drag-to-resize updates the inputs.
+  const [startStr, setStartStr] = useState(section.startSec.toFixed(2));
+  const [endStr, setEndStr] = useState(section.endSec.toFixed(2));
+  useEffect(() => {
+    setStartStr(section.startSec.toFixed(2));
+  }, [section.startSec]);
+  useEffect(() => {
+    setEndStr(section.endSec.toFixed(2));
+  }, [section.endSec]);
+
+  const MIN_GAP = 0.01;
+  const commitStart = (raw: string) => {
+    const v = Number.parseFloat(raw);
+    if (!Number.isFinite(v)) {
+      setStartStr(section.startSec.toFixed(2));
+      return;
+    }
+    const clamped = Math.max(0, Math.min(v, section.endSec - MIN_GAP));
+    onResize({ startSec: clamped });
+  };
+  const commitEnd = (raw: string) => {
+    const v = Number.parseFloat(raw);
+    if (!Number.isFinite(v)) {
+      setEndStr(section.endSec.toFixed(2));
+      return;
+    }
+    const upper = durationSec > 0 ? durationSec : v;
+    const clamped = Math.max(section.startSec + MIN_GAP, Math.min(v, upper));
+    onResize({ endSec: clamped });
+  };
+
   return (
     <Popover.Root
       open
       onOpenChange={(d) => {
         if (!d.open) onClose();
+      }}
+      onInteractOutside={(e) => {
+        // Pointer-down on a resize handle is "outside" the popover content
+        // by DOM containment, so the dismissable layer would close us. Mark
+        // handles with [data-section-handle] and veto dismiss for them so
+        // dragging keeps the section selected.
+        const target = e.detail.originalEvent.target as Element | null;
+        if (target && "closest" in target && target.closest("[data-section-handle]")) {
+          e.preventDefault();
+        }
       }}
       positioning={{ placement: "top" }}
     >
@@ -1662,15 +1797,79 @@ function SectionDeletePopover({
         <Popover.Positioner>
           <Popover.Content>
             <Popover.Title>
-              <styled.span fontSize="xs" opacity="0.7">
+              <styled.span fontSize="xs" opacity="0.7" px="4" fontWeight={600}>
                 {section.name}
                 {section.repeats && section.repeats > 1 ? ` ×${section.repeats}` : ""}
               </styled.span>
             </Popover.Title>
             <Popover.Body>
-              <Button size="xs" variant="outline" colorPalette="red" onClick={onDelete}>
-                Delete section
-              </Button>
+              <VStack gap="2" alignItems="stretch">
+                <HStack gap="2" alignItems="center">
+                  <styled.label fontSize="xs" opacity="0.7" minWidth="36px">
+                    Start
+                  </styled.label>
+                  <styled.input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    max={section.endSec - MIN_GAP}
+                    value={startStr}
+                    onChange={(e) => setStartStr(e.currentTarget.value)}
+                    onBlur={(e) => commitStart(e.currentTarget.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") commitStart(e.currentTarget.value);
+                    }}
+                    aria-label="section start time in seconds"
+                    width="80px"
+                    px="1"
+                    py="0"
+                    borderWidth="1px"
+                    borderColor="border"
+                    borderRadius="l1"
+                    bg="canvas"
+                    fontSize="xs"
+                    fontVariantNumeric="tabular-nums"
+                    textAlign="right"
+                  />
+                  <styled.span fontSize="xs" opacity="0.5">
+                    s
+                  </styled.span>
+                </HStack>
+                <HStack gap="2" alignItems="center">
+                  <styled.label fontSize="xs" opacity="0.7" minWidth="36px">
+                    End
+                  </styled.label>
+                  <styled.input
+                    type="number"
+                    step="0.01"
+                    min={section.startSec + MIN_GAP}
+                    max={durationSec || undefined}
+                    value={endStr}
+                    onChange={(e) => setEndStr(e.currentTarget.value)}
+                    onBlur={(e) => commitEnd(e.currentTarget.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") commitEnd(e.currentTarget.value);
+                    }}
+                    aria-label="section end time in seconds"
+                    width="80px"
+                    px="1"
+                    py="0"
+                    borderWidth="1px"
+                    borderColor="border"
+                    borderRadius="l1"
+                    bg="canvas"
+                    fontSize="xs"
+                    fontVariantNumeric="tabular-nums"
+                    textAlign="right"
+                  />
+                  <styled.span fontSize="xs" opacity="0.5">
+                    s
+                  </styled.span>
+                </HStack>
+                <Button size="xs" variant="outline" colorPalette="red" onClick={onDelete}>
+                  Delete section
+                </Button>
+              </VStack>
             </Popover.Body>
           </Popover.Content>
         </Popover.Positioner>
