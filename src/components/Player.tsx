@@ -1045,10 +1045,15 @@ async function loadStem(ctx: AudioContext, songId: string, stem: StemName): Prom
 }
 
 function fmtTime(seconds: number): string {
-  if (!isFinite(seconds) || seconds < 0) return "0:00";
-  const m = Math.floor(seconds / 60);
-  const s = Math.floor(seconds % 60);
-  return `${m}:${s.toString().padStart(2, "0")}`;
+  if (!isFinite(seconds) || seconds < 0) return "0:00.00";
+  // Work in centiseconds so 59.999 doesn't carry-flip the minute when
+  // we render two decimals.
+  const cs = Math.floor(seconds * 100);
+  const m = Math.floor(cs / 6000);
+  const rem = cs % 6000;
+  const s = Math.floor(rem / 100);
+  const hh = rem % 100;
+  return `${m}:${s.toString().padStart(2, "0")}.${hh.toString().padStart(2, "0")}`;
 }
 
 interface TabSourceCardProps {
