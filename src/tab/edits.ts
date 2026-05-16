@@ -99,6 +99,43 @@ export function updateSectionAt(
 }
 
 /**
+ * Explicit user-managed rest. Inferred rests (gaps between notes) are
+ * still rendered automatically by the tab as a visual hint, but they
+ * aren't entities — only the items in `EditsFile.rests` are selectable,
+ * resizable, and removable.
+ *
+ * `id` is a stable string (we don't have a natural key like notes do —
+ * a rest has no pitch — so it's a UUID generated on add).
+ */
+export interface RestEntry {
+  id: string;
+  startSec: number;
+  durSec: number;
+}
+
+export function addRest(rests: readonly RestEntry[], rest: RestEntry): RestEntry[] {
+  const out = [...rests, rest];
+  out.sort((a, b) => a.startSec - b.startSec);
+  return out;
+}
+
+export function removeRestById(rests: readonly RestEntry[], id: string): RestEntry[] {
+  return rests.filter((r) => r.id !== id);
+}
+
+/** Patch a rest's startSec / durSec. Re-sorts so iteration order stays
+ *  by-start-time after a drag. */
+export function updateRestById(
+  rests: readonly RestEntry[],
+  id: string,
+  patch: { startSec?: number; durSec?: number },
+): RestEntry[] {
+  const out = rests.map((r) => (r.id === id ? { ...r, ...patch } : r));
+  out.sort((a, b) => a.startSec - b.startSec);
+  return out;
+}
+
+/**
  * Per-strip mixer state. Stored alongside the other per-song settings
  * so each song remembers its own mute / solo / volume layout across
  * sessions instead of resetting every time the player mounts.
@@ -122,6 +159,12 @@ export interface EditsFile {
   version: number;
   notes: EditOp[];
   sections: SectionLabel[];
+  /**
+   * Explicit user-placed rests. Inferred rests (gaps between notes)
+   * still render automatically; this list is only the ones the user
+   * has materialised and wants editable.
+   */
+  rests?: RestEntry[];
   /**
    * Ripple-delete spans in audio time of the original mapped MIDI.
    * Sorted, non-overlapping. Cuts apply *before* note edits, so edit

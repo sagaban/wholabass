@@ -9,9 +9,11 @@ import "@fontsource/victor-mono/600.css";
 import "@fontsource/victor-mono/700.css";
 import "@fontsource/victor-mono/400-italic.css";
 import "./styles/global.css";
+import { ensureBravuraLoaded } from "./audio/smufl-font";
 
 // Apply the stored color mode before first paint to avoid a flash.
 applyMode(readStoredMode());
+ensureBravuraLoaded();
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>

@@ -5,6 +5,7 @@ import { css } from "styled-system/css";
 import { type StemEngine } from "@/audio/engine";
 import { estimateKey } from "@/audio/key";
 import { loadBassNotes, pitchName, type Articulation, type BassNote } from "@/audio/midi";
+import { SMUFL_REST } from "@/audio/smufl-font";
 import { Portal } from "@ark-ui/react/portal";
 import { Button, Popover } from "@/components/ui";
 import {
@@ -18,7 +19,13 @@ import {
   type PlannedSystem,
 } from "@/tab/render";
 import { DEFAULT_TUNING, enumeratePlacements, fingerNotes, type TabNote } from "@/tab/optimizer";
-import { beamGroups, classifyDuration, classifyNote, rhythmGlyph } from "@/tab/rhythm";
+import {
+  beamGroups,
+  classifyDuration,
+  classifyNote,
+  rhythmGlyph,
+  type RhythmKind,
+} from "@/tab/rhythm";
 import {
   applyCutsToNotes,
   applyEdits,
@@ -27,6 +34,7 @@ import {
   type EditOp,
   type EditsFile,
   type NoteId,
+  type RestEntry,
   type SectionLabel,
 } from "@/tab/edits";
 import { beatIndexAt, localBeatDuration } from "@/tab/rhythm";
@@ -51,6 +59,9 @@ interface TabProps {
   transact: (fn: () => void) => void;
   onRemoveSectionAt: (index: number) => void;
   onResizeSectionAt: (index: number, patch: { startSec?: number; endSec?: number }) => void;
+  onAddRest: (rest: RestEntry) => void;
+  onRemoveRest: (id: string) => void;
+  onResizeRest: (id: string, patch: { startSec?: number; durSec?: number }) => void;
   /** Ripple-delete a `[startSec, endSec)` audio-time span. */
   onRippleDelete: (span: CutSpan) => void;
 }
@@ -72,6 +83,9 @@ export function Tab({
   transact,
   onRemoveSectionAt,
   onResizeSectionAt,
+  onAddRest,
+  onRemoveRest,
+  onResizeRest,
   onRippleDelete,
 }: TabProps) {
   const [mappedBass, setMappedBass] = useState<readonly BassNote[]>([]);
@@ -187,10 +201,14 @@ export function Tab({
       engine={engine}
       durationSec={durationSec}
       sections={edits.sections}
+      rests={edits.rests ?? []}
       onEdit={onEdit}
       transact={transact}
       onRemoveSectionAt={onRemoveSectionAt}
       onResizeSectionAt={onResizeSectionAt}
+      onAddRest={onAddRest}
+      onRemoveRest={onRemoveRest}
+      onResizeRest={onResizeRest}
       onRippleDelete={onRippleDelete}
       playheadOffsetSec={edits.playheadOffsetSec ?? 0}
     />
@@ -203,10 +221,14 @@ interface TabSurfaceProps {
   engine: StemEngine;
   durationSec: number;
   sections: readonly SectionLabel[];
+  rests: readonly RestEntry[];
   onEdit: (op: EditOp) => void;
   transact: (fn: () => void) => void;
   onRemoveSectionAt: (index: number) => void;
   onResizeSectionAt: (index: number, patch: { startSec?: number; endSec?: number }) => void;
+  onAddRest: (rest: RestEntry) => void;
+  onRemoveRest: (id: string) => void;
+  onResizeRest: (id: string, patch: { startSec?: number; durSec?: number }) => void;
   onRippleDelete: (span: CutSpan) => void;
   /** User-tunable visual nudge for the playhead — see EditsFile. */
   playheadOffsetSec: number;
@@ -261,10 +283,14 @@ function TabSurface({
   engine,
   durationSec,
   sections,
+  rests,
   onEdit,
   transact,
   onRemoveSectionAt,
   onResizeSectionAt,
+  onAddRest,
+  onRemoveRest,
+  onResizeRest,
   onRippleDelete,
   playheadOffsetSec,
 }: TabSurfaceProps) {
@@ -345,9 +371,14 @@ function TabSurface({
           fullSection: sec,
           startsHere: sec.startSec >= sys.startSec,
         }));
-      return { sysNotes, sysGroups, sysSections };
+      // Explicit rests that intersect this row. Clipped to the row's
+      // bounds so a rest spanning two rows renders in both.
+      const sysRests = rests.filter(
+        (r) => r.startSec < sys.endSec && r.startSec + r.durSec > sys.startSec,
+      );
+      return { sysNotes, sysGroups, sysSections, sysRests };
     });
-  }, [systems, tabNotes, groups, sections]);
+  }, [systems, tabNotes, groups, sections, rests]);
 
   const [selectedId, setSelectedId] = useState<NoteId | null>(null);
   const [selection, setSelection] = useState<Set<NoteId>>(() => new Set());
@@ -395,6 +426,8 @@ function TabSurface({
   const closeAdd = useCallback(() => setAddTarget(null), []);
   const [selectedSectionIdx, setSelectedSectionIdx] = useState<number | null>(null);
   const closeSection = useCallback(() => setSelectedSectionIdx(null), []);
+  const [selectedRestId, setSelectedRestId] = useState<string | null>(null);
+  const closeRest = useCallback(() => setSelectedRestId(null), []);
 
   // Compute the song-time → (system, local x) mapping used by every
   // mouse-driven coord conversion. Memoised on systems only.
@@ -1044,6 +1077,19 @@ function TabSurface({
               notes={sliced[idx].sysNotes}
               groups={sliced[idx].sysGroups}
               sections={sliced[idx].sysSections}
+              explicitRests={sliced[idx].sysRests}
+              selectedRestId={selectedRestId}
+              onPickRest={setSelectedRestId}
+              onCloseRest={closeRest}
+              onMaterialiseRest={(startSec, durSec) => {
+                // Create the entity and immediately select it so the
+                // user can resize / delete via the popover.
+                const id = crypto.randomUUID();
+                onAddRest({ id, startSec, durSec });
+                setSelectedRestId(id);
+              }}
+              onRemoveRest={onRemoveRest}
+              onResizeRest={onResizeRest}
               selectedNote={selectedNoteSystemIdx === idx ? selectedNote : null}
               selection={selection}
               selectedSection={
@@ -1274,6 +1320,19 @@ interface TabSystemRowProps {
     fullSection: SectionLabel;
     startsHere: boolean;
   }[];
+  /** Explicit rests intersecting this row. */
+  explicitRests: readonly RestEntry[];
+  selectedRestId: string | null;
+  onPickRest: (id: string) => void;
+  onCloseRest: () => void;
+  /**
+   * Materialise a rest entity. Called from the AddNote popover's "Add
+   * rest" button AND from clicks on inferred ghost rests (which promote
+   * themselves to explicit rests when grabbed).
+   */
+  onMaterialiseRest: (startSec: number, durSec: number) => void;
+  onRemoveRest: (id: string) => void;
+  onResizeRest: (id: string, patch: { startSec?: number; durSec?: number }) => void;
   selectedNote: TabNote | null;
   selection: ReadonlySet<NoteId>;
   selectedSection: SectionLabel | null;
@@ -1306,6 +1365,13 @@ function TabSystemRow({
   notes,
   groups,
   sections,
+  explicitRests,
+  selectedRestId,
+  onPickRest,
+  onCloseRest,
+  onMaterialiseRest,
+  onRemoveRest,
+  onResizeRest,
   selectedNote,
   selection,
   selectedSection,
@@ -1354,6 +1420,33 @@ function TabSystemRow({
     }
     return out;
   }, [bars, barNumberOffset, system, notes]);
+
+  // Rests = gaps between consecutive notes inside this row, plus a
+  // leading gap before the first note and a trailing gap after the last.
+  // Anything shorter than a 32nd note is ignored — that's just the
+  // floating-point space between chained sub-divisions, not a musical
+  // rest.
+  const rests = useMemo(() => {
+    const out: { startSec: number; durSec: number; kind: RhythmKind }[] = [];
+    let cursor = system.startSec;
+    const flush = (gapStart: number, gapEnd: number) => {
+      const dur = gapEnd - gapStart;
+      if (dur <= 0) return;
+      const beatSec = localBeatDuration(gapStart, beats.beats);
+      if (dur < beatSec / 4 - 1e-6) return; // < 16th note → ignore
+      out.push({
+        startSec: gapStart,
+        durSec: dur,
+        kind: classifyDuration(dur, beatSec),
+      });
+    };
+    for (const n of notes) {
+      if (n.startSec > cursor) flush(cursor, n.startSec);
+      cursor = Math.max(cursor, n.startSec + n.durSec);
+    }
+    if (cursor < system.endSec) flush(cursor, system.endSec);
+    return out;
+  }, [system, notes, beats.beats]);
 
   const stemTop = stringIndexToY(0, layout) + 2;
   const stemBottom = stringIndexToY(0, layout) + STEM_LENGTH_PX;
@@ -1818,6 +1911,91 @@ function TabSystemRow({
           />
         )}
 
+        {/* Rests. Two passes: inferred (ghost-grey, drawn from note
+            gaps) and explicit (full opacity, clickable entities from
+            edits.rests). Inferred rests that overlap any explicit rest
+            are suppressed so we don't draw a ghost behind a real one. */}
+        {(() => {
+          const yMid =
+            layout.topPadding + ((layout.stringCount - 1) * layout.stringLineSpacing) / 2;
+          const overlapsExplicit = (rStart: number, rDur: number) =>
+            explicitRests.some(
+              (e) => rStart < e.startSec + e.durSec && rStart + rDur > e.startSec,
+            );
+          return (
+            <>
+              {rests
+                .filter((r) => !overlapsExplicit(r.startSec, r.durSec))
+                .map((r) => {
+                  const x = rowTimeToX(system, r.startSec);
+                  const xEnd = rowTimeToX(system, r.startSec + r.durSec);
+                  const cx = (x + xEnd) / 2;
+                  return (
+                    <g
+                      key={`rest-inf-${r.startSec.toFixed(3)}`}
+                      fill="var(--colors-fg-muted)"
+                      opacity={0.55}
+                      onClick={(ev) => {
+                        // Materialise this gap into an explicit rest so
+                        // the next click can resize / delete it.
+                        ev.stopPropagation();
+                        ev.preventDefault();
+                        onMaterialiseRest(r.startSec, r.durSec);
+                      }}
+                      className={css({ cursor: "pointer" })}
+                    >
+                      <rect
+                        x={cx - 9}
+                        y={yMid - 12}
+                        width={18}
+                        height={24}
+                        fill="transparent"
+                        style={{ pointerEvents: "all" }}
+                      />
+                      <RestGlyph kind={r.kind} cx={cx} y={yMid} />
+                    </g>
+                  );
+                })}
+              {explicitRests.map((r) => {
+                const clipStart = Math.max(r.startSec, system.startSec);
+                const clipEnd = Math.min(r.startSec + r.durSec, system.endSec);
+                const x = rowTimeToX(system, clipStart);
+                const xEnd = rowTimeToX(system, clipEnd);
+                const cx = (x + xEnd) / 2;
+                const kind = classifyDuration(
+                  r.durSec,
+                  localBeatDuration(r.startSec, beats.beats),
+                );
+                const isSelected = selectedRestId === r.id;
+                return (
+                  <g
+                    key={`rest-exp-${r.id}`}
+                    fill={isSelected ? "var(--colors-tomato-11)" : "var(--colors-fg-default)"}
+                    opacity={0.9}
+                    onClick={(ev) => {
+                      ev.stopPropagation();
+                      ev.preventDefault();
+                      onPickRest(r.id);
+                    }}
+                    className={css({ cursor: "pointer" })}
+                  >
+                    {/* Invisible hit pad so small glyphs are easy to click. */}
+                    <rect
+                      x={cx - 9}
+                      y={yMid - 12}
+                      width={18}
+                      height={24}
+                      fill="transparent"
+                      style={{ pointerEvents: "all" }}
+                    />
+                    <RestGlyph kind={kind} cx={cx} y={yMid} />
+                  </g>
+                );
+              })}
+            </>
+          );
+        })()}
+
         {/* Playhead — hidden until the rAF loop puts it on this row. */}
         <line
           ref={registerPlayhead}
@@ -1841,7 +2019,22 @@ function TabSystemRow({
         />
       )}
 
-      {addTarget && <AddNotePopover target={addTarget} onAdd={onAddNote} onClose={onCloseAdd} />}
+      {addTarget && (
+        <AddNotePopover
+          target={addTarget}
+          onAdd={onAddNote}
+          onAddRest={() => {
+            // Default to a quarter-note rest at the click's startSec.
+            // The user can resize via the rest's edit popover afterwards.
+            onMaterialiseRest(
+              addTarget.startSec,
+              localBeatDuration(addTarget.startSec, beats.beats),
+            );
+            onCloseAdd();
+          }}
+          onClose={onCloseAdd}
+        />
+      )}
 
       {selectedSection && selectedSectionIdx !== null && (
         <SectionEditPopover
@@ -1854,17 +2047,134 @@ function TabSystemRow({
           onClose={onCloseSection}
         />
       )}
+
+      {(() => {
+        const sel = selectedRestId
+          ? explicitRests.find((r) => r.id === selectedRestId)
+          : null;
+        if (!sel) return null;
+        if (sel.startSec >= system.endSec || sel.startSec + sel.durSec <= system.startSec) {
+          return null;
+        }
+        const x = rowTimeToX(system, Math.max(sel.startSec, system.startSec));
+        const xEnd = rowTimeToX(system, Math.min(sel.startSec + sel.durSec, system.endSec));
+        const yMid =
+          layout.topPadding + ((layout.stringCount - 1) * layout.stringLineSpacing) / 2;
+        const beatSec = localBeatDuration(sel.startSec, beats.beats);
+        return (
+          <RestEditPopover
+            rest={sel}
+            beatSec={beatSec}
+            anchorX={(x + xEnd) / 2}
+            anchorY={yMid}
+            onResize={(patch) => onResizeRest(sel.id, patch)}
+            onDelete={() => {
+              onRemoveRest(sel.id);
+              onCloseRest();
+            }}
+            onClose={onCloseRest}
+          />
+        );
+      })()}
     </Box>
+  );
+}
+
+interface RestEditPopoverProps {
+  rest: RestEntry;
+  /** Local quarter-note length, used to label duration buttons (W/H/Q…). */
+  beatSec: number;
+  anchorX: number;
+  anchorY: number;
+  onResize: (patch: { startSec?: number; durSec?: number }) => void;
+  onDelete: () => void;
+  onClose: () => void;
+}
+
+function RestEditPopover({
+  rest,
+  beatSec,
+  anchorX,
+  anchorY,
+  onResize,
+  onDelete,
+  onClose,
+}: RestEditPopoverProps) {
+  return (
+    <Popover.Root
+      open
+      onOpenChange={(d) => {
+        if (!d.open) onClose();
+      }}
+      positioning={{ placement: "top" }}
+    >
+      <Popover.Anchor asChild>
+        <styled.div
+          position="absolute"
+          width="14px"
+          height="16px"
+          pointerEvents="none"
+          style={{ left: `${anchorX - 7}px`, top: `${anchorY - 8}px` }}
+        />
+      </Popover.Anchor>
+      <Portal>
+        <Popover.Positioner>
+          <Popover.Content>
+            <Popover.Title>
+              <styled.span fontSize="xs" opacity="0.7">
+                rest @ {rest.startSec.toFixed(2)}s
+              </styled.span>
+            </Popover.Title>
+            <Popover.Body>
+              <styled.div fontSize="xs" opacity="0.7" mb="1">
+                duration
+              </styled.div>
+              <HStack gap="1" flexWrap="wrap" mb="3">
+                {(
+                  [
+                    ["W", 4],
+                    ["H", 2],
+                    ["Q", 1],
+                    ["E", 0.5],
+                    ["S", 0.25],
+                  ] as const
+                ).map(([label, beatMul]) => {
+                  const target = beatSec * beatMul;
+                  const on = Math.abs(rest.durSec - target) / target < 0.01;
+                  return (
+                    <Button
+                      key={`rdur-${label}`}
+                      size="xs"
+                      variant={on ? "solid" : "outline"}
+                      onClick={() => {
+                        if (on) return;
+                        onResize({ durSec: target });
+                      }}
+                    >
+                      {label}
+                    </Button>
+                  );
+                })}
+              </HStack>
+              <Button size="xs" variant="outline" colorPalette="red" onClick={onDelete}>
+                Delete rest
+              </Button>
+            </Popover.Body>
+          </Popover.Content>
+        </Popover.Positioner>
+      </Portal>
+    </Popover.Root>
   );
 }
 
 interface AddNotePopoverProps {
   target: AddNoteTarget;
   onAdd: (string: number, fret: number) => void;
+  onAddRest: () => void;
   onClose: () => void;
 }
 
-function AddNotePopover({ target, onAdd, onClose }: AddNotePopoverProps) {
+function AddNotePopover({ target, onAdd, onAddRest, onClose }: AddNotePopoverProps) {
   return (
     <Popover.Root
       open
@@ -1894,7 +2204,7 @@ function AddNotePopover({ target, onAdd, onClose }: AddNotePopoverProps) {
               <styled.div fontSize="xs" opacity="0.7" mb="1">
                 fret
               </styled.div>
-              <HStack gap="1" flexWrap="wrap">
+              <HStack gap="1" flexWrap="wrap" mb="2">
                 {ADD_NOTE_FRETS.map((fret) => (
                   <Button
                     key={`fret-${fret}`}
@@ -1906,6 +2216,9 @@ function AddNotePopover({ target, onAdd, onClose }: AddNotePopoverProps) {
                   </Button>
                 ))}
               </HStack>
+              <Button size="xs" variant="outline" onClick={onAddRest}>
+                Add rest
+              </Button>
             </Popover.Body>
           </Popover.Content>
         </Popover.Positioner>
@@ -2087,6 +2400,42 @@ interface NoteEditPopoverProps {
   anchorY: number;
   onEdit: (op: EditOp) => void;
   onClose: () => void;
+}
+
+/**
+ * Per-duration rest glyph centred on (cx, y). Renders the canonical
+ * SMuFL codepoint via the Bravura font (loaded once in main.tsx). One
+ * `<text>` element per rest means the user can click / select / future-
+ * delete each one as a real entity.
+ */
+function RestGlyph({
+  kind,
+  cx,
+  y,
+}: {
+  kind: RhythmKind;
+  cx: number;
+  y: number;
+}) {
+  let glyph = SMUFL_REST.quarter;
+  if (kind === "whole") glyph = SMUFL_REST.whole;
+  else if (kind === "half" || kind === "dottedHalf") glyph = SMUFL_REST.half;
+  else if (kind === "quarter" || kind === "dottedQuarter") glyph = SMUFL_REST.quarter;
+  else if (kind === "eighth" || kind === "dottedEighth") glyph = SMUFL_REST.eighth;
+  else if (kind === "sixteenth") glyph = SMUFL_REST.sixteenth;
+  return (
+    <text
+      x={cx}
+      y={y}
+      fontFamily="Bravura"
+      fontSize="18"
+      textAnchor="middle"
+      dominantBaseline="middle"
+      stroke="none"
+    >
+      {glyph}
+    </text>
+  );
 }
 
 function bestOctavePlacement(pitch: number) {

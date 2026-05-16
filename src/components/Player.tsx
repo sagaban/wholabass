@@ -36,17 +36,21 @@ import { Tab } from "@/components/Tab";
 import {
   EMPTY_EDITS,
   addCut,
+  addRest,
   addSection,
   applyCutsToNotes,
   applyNoteEditsToBass,
   normalizeMixerState,
+  removeRestById,
   removeSectionAt,
+  updateRestById,
   updateSectionAt,
   upsertEdit,
   type CutSpan,
   type EditOp,
   type EditsFile,
   type MixerState,
+  type RestEntry,
   type SectionLabel,
 } from "@/tab/edits";
 
@@ -93,6 +97,16 @@ function normalizeEditsFile(raw: unknown): EditsFile {
     version: typeof r.version === "number" ? r.version : EMPTY_EDITS.version,
     notes: Array.isArray(r.notes) ? (r.notes as EditOp[]) : [],
     sections: Array.isArray(r.sections) ? r.sections : [],
+    rests: Array.isArray(r.rests)
+      ? r.rests.filter(
+          (re): re is RestEntry =>
+            !!re &&
+            typeof (re as RestEntry).id === "string" &&
+            typeof (re as RestEntry).startSec === "number" &&
+            typeof (re as RestEntry).durSec === "number" &&
+            (re as RestEntry).durSec > 0,
+        )
+      : [],
     cuts,
     midiOffsetSec: typeof r.midiOffsetSec === "number" ? r.midiOffsetSec : 0,
     // Clamp to a sane range so a corrupt edits file can't divide-by-zero
@@ -280,6 +294,36 @@ export function Player({ songId }: PlayerProps) {
           ...prev,
           sections: updateSectionAt(prev.sections, index, { startSec, endSec }),
         };
+      });
+    },
+    [mutateEdits],
+  );
+
+  const onAddRest = useCallback(
+    (rest: RestEntry) => {
+      mutateEdits((prev) => ({ ...prev, rests: addRest(prev.rests ?? [], rest) }));
+    },
+    [mutateEdits],
+  );
+
+  const onRemoveRest = useCallback(
+    (id: string) => {
+      mutateEdits((prev) => ({ ...prev, rests: removeRestById(prev.rests ?? [], id) }));
+    },
+    [mutateEdits],
+  );
+
+  const onResizeRest = useCallback(
+    (id: string, patch: { startSec?: number; durSec?: number }) => {
+      mutateEdits((prev) => {
+        const cur = (prev.rests ?? []).find((r) => r.id === id);
+        if (!cur) return prev;
+        const startSec = patch.startSec ?? cur.startSec;
+        const durSec = patch.durSec ?? cur.durSec;
+        if (!Number.isFinite(startSec) || !Number.isFinite(durSec)) return prev;
+        if (startSec < 0 || durSec <= 0) return prev;
+        if (startSec === cur.startSec && durSec === cur.durSec) return prev;
+        return { ...prev, rests: updateRestById(prev.rests ?? [], id, { startSec, durSec }) };
       });
     },
     [mutateEdits],
@@ -1012,6 +1056,9 @@ export function Player({ songId }: PlayerProps) {
             transact={transact}
             onRemoveSectionAt={onRemoveSectionAt}
             onResizeSectionAt={onResizeSectionAt}
+            onAddRest={onAddRest}
+            onRemoveRest={onRemoveRest}
+            onResizeRest={onResizeRest}
             onRippleDelete={onRippleDelete}
           />
         )}
