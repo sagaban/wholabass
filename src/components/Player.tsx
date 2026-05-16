@@ -29,6 +29,7 @@ import {
   type MidiTrackInfo,
 } from "@/audio/midi";
 import { MidiSynth } from "@/audio/midi-synth";
+import { importSongsterrBass } from "@/audio/songsterr";
 import { StemMixer } from "@/components/StemMixer";
 import { PianoRoll } from "@/components/PianoRoll";
 import { Tab } from "@/components/Tab";
@@ -1192,9 +1193,11 @@ function TabSourceCard({
     | { kind: "idle" }
     | { kind: "uploading" }
     | { kind: "transcribing"; progress: number; stage: string }
+    | { kind: "songsterr"; stage: string }
     | { kind: "ok" }
     | { kind: "error"; message: string }
   >({ kind: "idle" });
+  const [songsterrUrl, setSongsterrUrl] = useState("");
   const [collapsed, setCollapsed] = useState(false);
   const [pendingPick, setPendingPick] = useState<{
     buffer: ArrayBuffer;
@@ -1273,6 +1276,26 @@ function TabSourceCard({
   // Transcription engine + preset travel together as "engine:preset"
   // so the dropdown can offer the cross-product without a 2D picker.
   const [transcribeChoice, setTranscribeChoice] = useState<string>("basic_pitch:balanced");
+  const onImportSongsterr = async () => {
+    const trimmed = songsterrUrl.trim();
+    if (!trimmed) return;
+    setStatus({ kind: "songsterr", stage: "fetching" });
+    try {
+      const { midi, tab } = await importSongsterrBass(trimmed);
+      // bass.mid drives the synth + downstream pipeline; bass.tab.json
+      // carries the original tab's string/fret choice so the loader can
+      // skip the optimizer's guesswork.
+      setStatus({ kind: "songsterr", stage: "saving" });
+      await invoke("replace_bass_midi", { songId, bytes: Array.from(midi) });
+      await invoke("write_bass_tab", { songId, tab });
+      setStatus({ kind: "ok" });
+      setSongsterrUrl("");
+      onReplaced();
+    } catch (err: unknown) {
+      setStatus({ kind: "error", message: String(err) });
+    }
+  };
+
   const onTranscribe = async () => {
     setStatus({ kind: "transcribing", progress: 0, stage: "starting" });
     try {
@@ -1285,7 +1308,10 @@ function TabSourceCard({
     }
   };
 
-  const busy = status.kind === "uploading" || status.kind === "transcribing";
+  const busy =
+    status.kind === "uploading" ||
+    status.kind === "transcribing" ||
+    status.kind === "songsterr";
 
   return (
     <Box
@@ -1398,11 +1424,50 @@ function TabSourceCard({
                 updated ✓
               </styled.span>
             )}
+            {status.kind === "songsterr" && (
+              <styled.span fontSize="xs" opacity="0.6">
+                songsterr: {status.stage}…
+              </styled.span>
+            )}
             {status.kind === "error" && (
               <styled.span fontSize="xs" color="error">
                 {status.message}
               </styled.span>
             )}
+          </HStack>
+
+          <HStack gap="2" alignItems="center" flexWrap="wrap">
+            <styled.span fontSize="xs" opacity="0.7" minWidth="76px">
+              Songsterr URL
+            </styled.span>
+            <styled.input
+              type="url"
+              value={songsterrUrl}
+              onChange={(e) => setSongsterrUrl(e.currentTarget.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !busy) void onImportSongsterr();
+              }}
+              placeholder="https://www.songsterr.com/a/wsa/…"
+              aria-label="songsterr song URL"
+              flex="1"
+              minWidth="200px"
+              px="2"
+              py="1"
+              borderWidth="1px"
+              borderColor="border"
+              borderRadius="l1"
+              bg="canvas"
+              fontSize="xs"
+              disabled={busy}
+            />
+            <Button
+              size="xs"
+              variant="outline"
+              onClick={() => void onImportSongsterr()}
+              disabled={busy || songsterrUrl.trim().length === 0}
+            >
+              Import bass
+            </Button>
           </HStack>
 
           {status.kind === "transcribing" && (

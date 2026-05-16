@@ -48,6 +48,21 @@ const SECTIONS: Section[] = [
         url: "https://github.com/cutterbl/SoundTouchJS",
         note: "real-time time-stretching",
       },
+      {
+        name: "alphaTab",
+        url: "https://www.alphatab.net",
+        note: "Guitar Pro / alphaTab score model + MIDI export",
+      },
+    ],
+  },
+  {
+    title: "Songsterr import",
+    credits: [
+      {
+        name: "songsterr-downloader",
+        url: "https://github.com/Metaphysics0/songsterr-downloader",
+        note: "Songsterr → alphaTab converter (MIT, vendored)",
+      },
     ],
   },
   {
