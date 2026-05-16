@@ -166,6 +166,7 @@ export function Tab({
       onRemoveSectionAt={onRemoveSectionAt}
       onResizeSectionAt={onResizeSectionAt}
       onRippleDelete={onRippleDelete}
+      playheadOffsetSec={edits.playheadOffsetSec ?? 0}
     />
   );
 }
@@ -181,6 +182,8 @@ interface TabSurfaceProps {
   onRemoveSectionAt: (index: number) => void;
   onResizeSectionAt: (index: number, patch: { startSec?: number; endSec?: number }) => void;
   onRippleDelete: (span: CutSpan) => void;
+  /** User-tunable visual nudge for the playhead — see EditsFile. */
+  playheadOffsetSec: number;
 }
 
 interface AddNoteTarget {
@@ -237,6 +240,7 @@ function TabSurface({
   onRemoveSectionAt,
   onResizeSectionAt,
   onRippleDelete,
+  playheadOffsetSec,
 }: TabSurfaceProps) {
   const layout = DEFAULT_LAYOUT;
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -929,7 +933,10 @@ function TabSurface({
   useEffect(() => {
     let raf = 0;
     const tick = () => {
-      const t = engine.getCurrentTime();
+      // User-tunable visual offset so the playhead can be nudged into
+      // sync with whatever audio path the listener's on (built-in vs
+      // bluetooth latency, etc). Synth scheduling stays untouched.
+      const t = engine.getCurrentTime() + playheadOffsetSec;
       const idx = findSystem(t);
       const sys = systems[idx];
       if (sys) {
@@ -959,7 +966,7 @@ function TabSurface({
     };
     raf = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(raf);
-  }, [engine, layout, systems, findSystem]);
+  }, [engine, layout, systems, findSystem, playheadOffsetSec]);
 
   return (
     <Box mt="3">

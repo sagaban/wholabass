@@ -156,6 +156,14 @@ export interface EditsFile {
    * (bars finish sooner). Applied as: `songT = beatT / beatsSpeed + beatsOffsetSec`.
    */
   beatsSpeed?: number;
+  /**
+   * Visual-only offset added to `engine.getCurrentTime()` for the tab
+   * playhead and seek-slider position. Compensates for AudioContext
+   * output latency vs screen paint delay — different devices need
+   * different values so this is a manual knob the user dials in by ear.
+   * Positive nudges the playhead forward; negative back. Default 0.
+   */
+  playheadOffsetSec?: number;
   /** Free-form lyrics + chord text, displayed in the side panel. */
   lyrics?: string;
   /**

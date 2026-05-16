@@ -99,6 +99,10 @@ function normalizeEditsFile(raw: unknown): EditsFile {
     midiSpeed: speedRaw > 0.1 && speedRaw < 5 ? speedRaw : 1,
     beatsOffsetSec: typeof r.beatsOffsetSec === "number" ? r.beatsOffsetSec : 0,
     beatsSpeed: beatsSpeedRaw > 0.1 && beatsSpeedRaw < 5 ? beatsSpeedRaw : 1,
+    playheadOffsetSec:
+      typeof r.playheadOffsetSec === "number" && Math.abs(r.playheadOffsetSec) < 1
+        ? r.playheadOffsetSec
+        : 0,
     lyrics: typeof r.lyrics === "string" ? r.lyrics : "",
     ...(mixer ? { mixer } : {}),
   };
@@ -312,6 +316,14 @@ export function Player({ songId }: PlayerProps) {
     (speed: number) => {
       const clamped = Math.max(0.1, Math.min(5, speed));
       mutateEdits((prev) => ({ ...prev, beatsSpeed: clamped }));
+    },
+    [mutateEdits],
+  );
+
+  const onSetPlayheadOffset = useCallback(
+    (offsetSec: number) => {
+      const clamped = Math.max(-1, Math.min(1, offsetSec));
+      mutateEdits((prev) => ({ ...prev, playheadOffsetSec: clamped }));
     },
     [mutateEdits],
   );
@@ -647,7 +659,10 @@ export function Player({ songId }: PlayerProps) {
             }
           }
         }
-        const t = engine.getCurrentTime();
+        // The clock + seek slider share the same visual-offset nudge as
+        // the tab playhead so they all move in lockstep. Read via the
+        // ref so changing the offset doesn't tear down the rAF loop.
+        const t = engine.getCurrentTime() + (editsRef.current.playheadOffsetSec ?? 0);
         setPosition(t);
         if (t >= engine.duration && !engine.getLoop()) {
           setIsPlaying(false);
@@ -948,8 +963,10 @@ export function Player({ songId }: PlayerProps) {
           <BeatsCalibrationCard
             offsetSec={edits.beatsOffsetSec ?? 0}
             speed={edits.beatsSpeed ?? 1}
+            playheadOffsetSec={edits.playheadOffsetSec ?? 0}
             onSetOffset={onSetBeatsOffset}
             onSetSpeed={onSetBeatsSpeed}
+            onSetPlayheadOffset={onSetPlayheadOffset}
           />
 
           <SectionsList
@@ -1084,15 +1101,19 @@ function fmtTime(seconds: number): string {
 interface BeatsCalibrationCardProps {
   offsetSec: number;
   speed: number;
+  playheadOffsetSec: number;
   onSetOffset: (sec: number) => void;
   onSetSpeed: (speed: number) => void;
+  onSetPlayheadOffset: (sec: number) => void;
 }
 
 function BeatsCalibrationCard({
   offsetSec,
   speed,
+  playheadOffsetSec,
   onSetOffset,
   onSetSpeed,
+  onSetPlayheadOffset,
 }: BeatsCalibrationCardProps) {
   const [collapsed, setCollapsed] = useState(true);
   return (
@@ -1134,6 +1155,11 @@ function BeatsCalibrationCard({
             label="Beats offset"
           />
           <SpeedControls speed={speed} onSetSpeed={onSetSpeed} label="Beats speed" />
+          <OffsetControls
+            offsetSec={playheadOffsetSec}
+            onSetOffset={onSetPlayheadOffset}
+            label="Playhead sync"
+          />
         </>
       )}
     </Box>
