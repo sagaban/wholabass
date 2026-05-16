@@ -1,6 +1,7 @@
 pub mod ids;
 pub mod ipc;
 pub mod library;
+pub mod songsterr;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -398,6 +399,15 @@ async fn set_song_title(song_id: String, title: String, app: AppHandle) -> Resul
     library::set_title(&library_root, &song_id, &title).map_err(|e| e.to_string())
 }
 
+/// Scrape the bass-track revision JSON from a Songsterr song URL. Returns
+/// the metadata + raw payload; the frontend feeds it to alphaTab to get
+/// GP7 bytes. Errors surface as plain strings since the frontend already
+/// renders them via try/catch around `invoke`.
+#[tauri::command]
+async fn fetch_songsterr_bass(url: String) -> Result<songsterr::SongsterrBassResult, String> {
+    songsterr::fetch_bass(&url).await.map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 async fn cancel_ingest(
     state: State<'_, AppState>,
@@ -717,7 +727,8 @@ pub fn run() {
             drum_onsets,
             read_edits,
             write_edits,
-            models_status
+            models_status,
+            fetch_songsterr_bass
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
