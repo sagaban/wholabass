@@ -45,6 +45,11 @@ export type EditOp =
        * fingering — the user can re-pick the fret later if they want.
        */
       articulation?: Articulation;
+      /**
+       * Override the note's duration. Optional so a replace that only
+       * changes fingering doesn't have to know or care about timing.
+       */
+      durSec?: number;
     }
   | { kind: "delete"; id: NoteId }
   | {
@@ -328,6 +333,7 @@ export function applyEdits(notes: readonly TabNote[], edits: EditsFile): TabNote
       const merged: TabNote = { ...n, string: r.string, fret: r.fret };
       if (r.articulation) merged.articulation = r.articulation;
       else if ("articulation" in r) delete merged.articulation;
+      if (r.durSec !== undefined && r.durSec > 0) merged.durSec = r.durSec;
       out.push(merged);
     } else {
       out.push(n);
@@ -352,14 +358,17 @@ export function applyNoteEditsToBass(
   if (ops.length === 0) return notes.slice();
   const deleteIds = new Set<NoteId>();
   const articulationById = new Map<NoteId, Articulation | undefined>();
+  const durById = new Map<NoteId, number>();
   const additions: BassNote[] = [];
   for (const op of ops) {
     if (op.kind === "delete") deleteIds.add(op.id);
     else if (op.kind === "replace") {
       // String/fret are fingering-only; ignored for synth. We do honour
       // the articulation field so palm-mute / staccato / accent / ghost /
-      // harmonic toggles flow into playback.
+      // harmonic toggles flow into playback. Duration overrides flow
+      // through too — the synth needs to know how long to ring.
       articulationById.set(op.id, op.articulation);
+      if (op.durSec !== undefined && op.durSec > 0) durById.set(op.id, op.durSec);
     } else if (op.kind === "add") {
       additions.push({
         pitch: op.pitch,
@@ -374,11 +383,15 @@ export function applyNoteEditsToBass(
   for (const n of notes) {
     const id = noteId(n.startSec, n.pitch);
     if (deleteIds.has(id)) continue;
-    if (articulationById.has(id)) {
+    if (articulationById.has(id) || durById.has(id)) {
       const art = articulationById.get(id);
       const next: BassNote = { ...n };
-      if (art) next.articulation = art;
-      else delete next.articulation;
+      if (articulationById.has(id)) {
+        if (art) next.articulation = art;
+        else delete next.articulation;
+      }
+      const dur = durById.get(id);
+      if (dur !== undefined) next.durSec = dur;
       out.push(next);
     } else {
       out.push(n);
@@ -411,6 +424,7 @@ export function upsertEdit(ops: readonly EditOp[], next: EditOp): EditOp[] {
     const merged = { ...existing, string: next.string, fret: next.fret };
     if (next.articulation) merged.articulation = next.articulation;
     else delete merged.articulation;
+    if (next.durSec !== undefined && next.durSec > 0) merged.durSec = next.durSec;
     return [...filtered, merged];
   }
   return [...filtered, next];

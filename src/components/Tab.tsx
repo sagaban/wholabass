@@ -1481,6 +1481,50 @@ function TabSystemRow({
           </text>
         ))}
 
+        {/* Beat + 8th-note subdivision grid. Drawn before bar lines so
+            the darker bar strokes paint on top. Beats inside [system] are
+            full strokes; 8th-note midpoints are dashed and very faint. */}
+        {beats.beats.map((t) => {
+          if (t < system.startSec || t >= system.endSec) return null;
+          // Bar boundaries get their own (darker) stroke below.
+          if (bars.some((b) => Math.abs(b - t) < 1e-4)) return null;
+          const x = rowTimeToX(system, t);
+          return (
+            <line
+              key={`beat-${t.toFixed(4)}`}
+              x1={x}
+              x2={x}
+              y1={layout.topPadding - 2}
+              y2={layout.topPadding + (layout.stringCount - 1) * layout.stringLineSpacing + 2}
+              stroke="var(--colors-border)"
+              strokeWidth={0.5}
+              opacity={0.6}
+              pointerEvents="none"
+            />
+          );
+        })}
+        {beats.beats.map((t, i) => {
+          const next = beats.beats[i + 1];
+          if (next === undefined) return null;
+          const mid = (t + next) / 2;
+          if (mid < system.startSec || mid >= system.endSec) return null;
+          const x = rowTimeToX(system, mid);
+          return (
+            <line
+              key={`8th-${mid.toFixed(4)}`}
+              x1={x}
+              x2={x}
+              y1={layout.topPadding + 2}
+              y2={layout.topPadding + (layout.stringCount - 1) * layout.stringLineSpacing - 2}
+              stroke="var(--colors-border)"
+              strokeWidth={0.5}
+              opacity={0.3}
+              strokeDasharray="2 2"
+              pointerEvents="none"
+            />
+          );
+        })}
+
         {/* Bar lines + chord-root labels + bar numbers */}
         {localBars.map((b) => (
           <g key={`bar-${b.barNumber}`}>
@@ -1734,6 +1778,7 @@ function TabSystemRow({
       {selectedNote && (
         <NoteEditPopover
           note={selectedNote}
+          beats={beats.beats}
           anchorX={rowTimeToX(system, selectedNote.startSec)}
           anchorY={stringIndexToY(selectedNote.string, layout)}
           onEdit={onEdit}
@@ -1978,6 +2023,11 @@ function SectionEditPopover({
 
 interface NoteEditPopoverProps {
   note: TabNote;
+  /**
+   * Sorted beat times in song-time, used to compute the local quarter-note
+   * duration so the user can pick W/H/Q/E/S in musical terms.
+   */
+  beats: readonly number[];
   anchorX: number;
   anchorY: number;
   onEdit: (op: EditOp) => void;
@@ -1996,12 +2046,22 @@ function bestOctavePlacement(pitch: number) {
   return best;
 }
 
-function NoteEditPopover({ note, anchorX, anchorY, onEdit, onClose }: NoteEditPopoverProps) {
+function NoteEditPopover({
+  note,
+  beats,
+  anchorX,
+  anchorY,
+  onEdit,
+  onClose,
+}: NoteEditPopoverProps) {
   const id = tabNoteId(note);
   const placements = useMemo(() => enumeratePlacements(note.pitch, DEFAULT_TUNING), [note.pitch]);
   const octaveUp = useMemo(() => bestOctavePlacement(note.pitch + 12), [note.pitch]);
   const octaveDown = useMemo(() => bestOctavePlacement(note.pitch - 12), [note.pitch]);
   const noAlternates = placements.length === 0;
+  // Local quarter-note length at this note's start, so W/H/Q/E/S map to
+  // the song's actual tempo rather than a hardcoded constant.
+  const beatSec = useMemo(() => localBeatDuration(note.startSec, beats), [note.startSec, beats]);
 
   return (
     <Popover.Root
@@ -2057,6 +2117,45 @@ function NoteEditPopover({ note, anchorX, anchorY, onEdit, onClose }: NoteEditPo
                     );
                   })
                 )}
+              </HStack>
+              <styled.div fontSize="xs" opacity="0.7" mb="1">
+                duration
+              </styled.div>
+              <HStack gap="1" flexWrap="wrap" mb="3">
+                {(
+                  [
+                    ["W", 4],
+                    ["H", 2],
+                    ["Q", 1],
+                    ["E", 0.5],
+                    ["S", 0.25],
+                  ] as const
+                ).map(([label, beatMul]) => {
+                  const target = beatSec * beatMul;
+                  // Highlight the closest button — durations land within 1% of the
+                  // target after applyEdits rounding.
+                  const on = Math.abs(note.durSec - target) / target < 0.01;
+                  return (
+                    <Button
+                      key={`dur-${label}`}
+                      size="xs"
+                      variant={on ? "solid" : "outline"}
+                      onClick={() => {
+                        if (on) return;
+                        onEdit({
+                          kind: "replace",
+                          id,
+                          string: note.string,
+                          fret: note.fret,
+                          ...(note.articulation ? { articulation: note.articulation } : {}),
+                          durSec: target,
+                        });
+                      }}
+                    >
+                      {label}
+                    </Button>
+                  );
+                })}
               </HStack>
               <styled.div fontSize="xs" opacity="0.7" mb="1">
                 articulation

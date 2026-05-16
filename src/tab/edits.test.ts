@@ -330,6 +330,14 @@ describe("applyNoteEditsToBass", () => {
     expect(out).toEqual(notes);
   });
 
+  test("replace ops can override durSec on the bass note", () => {
+    const notes = [bn(0, 40)];
+    const out = applyNoteEditsToBass(notes, [
+      { kind: "replace", id: noteId(0, 40), string: 0, fret: 0, durSec: 2 },
+    ]);
+    expect(out[0].durSec).toBe(2);
+  });
+
   test("replace ops carry articulation onto the bass note", () => {
     const notes = [bn(0, 40)];
     const out = applyNoteEditsToBass(notes, [
