@@ -1477,7 +1477,7 @@ function OffsetControls({
 }: OffsetControlsProps) {
   // Mirror the value to a string locally so the user can clear / type a
   // sign without us snapping it back on every keystroke.
-  const [text, setText] = useState(offsetSec.toFixed(2));
+  const [text, setText] = useState(() => offsetSec.toFixed(2));
   useEffect(() => {
     setText(offsetSec.toFixed(2));
   }, [offsetSec]);
@@ -1604,7 +1604,7 @@ interface SpeedControlsProps {
 function SpeedControls({ speed, onSetSpeed, label = "MIDI speed" }: SpeedControlsProps) {
   // Display + edit as percent (100 = native) — easier on the ear than
   // raw multipliers — but we round to 2 decimal places under the hood.
-  const [text, setText] = useState((speed * 100).toFixed(2));
+  const [text, setText] = useState(() => (speed * 100).toFixed(2));
   useEffect(() => {
     setText((speed * 100).toFixed(2));
   }, [speed]);

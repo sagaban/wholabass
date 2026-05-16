@@ -1908,8 +1908,8 @@ function SectionEditPopover({
   onClose,
 }: SectionEditPopoverProps) {
   // Mirror the live section bounds so drag-to-resize updates the inputs.
-  const [startStr, setStartStr] = useState(section.startSec.toFixed(2));
-  const [endStr, setEndStr] = useState(section.endSec.toFixed(2));
+  const [startStr, setStartStr] = useState(() => section.startSec.toFixed(2));
+  const [endStr, setEndStr] = useState(() => section.endSec.toFixed(2));
   useEffect(() => {
     setStartStr(section.startSec.toFixed(2));
   }, [section.startSec]);
