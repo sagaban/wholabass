@@ -74,6 +74,7 @@ function normalizeEditsFile(raw: unknown): EditsFile {
   if (!raw || typeof raw !== "object") return EMPTY_EDITS;
   const r = raw as Partial<EditsFile>;
   const speedRaw = typeof r.midiSpeed === "number" ? r.midiSpeed : 1;
+  const beatsSpeedRaw = typeof r.beatsSpeed === "number" ? r.beatsSpeed : 1;
   // Cuts are stored in sequential order, each in the time domain
   // produced by the prior cuts. Just shape-check each entry; no
   // sorting or merging — that would change the meaning of later cuts.
@@ -96,6 +97,8 @@ function normalizeEditsFile(raw: unknown): EditsFile {
     // Clamp to a sane range so a corrupt edits file can't divide-by-zero
     // the time mapping or produce century-long bass notes.
     midiSpeed: speedRaw > 0.1 && speedRaw < 5 ? speedRaw : 1,
+    beatsOffsetSec: typeof r.beatsOffsetSec === "number" ? r.beatsOffsetSec : 0,
+    beatsSpeed: beatsSpeedRaw > 0.1 && beatsSpeedRaw < 5 ? beatsSpeedRaw : 1,
     lyrics: typeof r.lyrics === "string" ? r.lyrics : "",
     ...(mixer ? { mixer } : {}),
   };
@@ -294,6 +297,21 @@ export function Player({ songId }: PlayerProps) {
     (speed: number) => {
       const clamped = Math.max(0.1, Math.min(5, speed));
       mutateEdits((prev) => ({ ...prev, midiSpeed: clamped }));
+    },
+    [mutateEdits],
+  );
+
+  const onSetBeatsOffset = useCallback(
+    (offsetSec: number) => {
+      mutateEdits((prev) => ({ ...prev, beatsOffsetSec: offsetSec }));
+    },
+    [mutateEdits],
+  );
+
+  const onSetBeatsSpeed = useCallback(
+    (speed: number) => {
+      const clamped = Math.max(0.1, Math.min(5, speed));
+      mutateEdits((prev) => ({ ...prev, beatsSpeed: clamped }));
     },
     [mutateEdits],
   );
@@ -927,6 +945,13 @@ export function Player({ songId }: PlayerProps) {
             }}
           />
 
+          <BeatsCalibrationCard
+            offsetSec={edits.beatsOffsetSec ?? 0}
+            speed={edits.beatsSpeed ?? 1}
+            onSetOffset={onSetBeatsOffset}
+            onSetSpeed={onSetBeatsSpeed}
+          />
+
           <SectionsList
             sections={edits.sections}
             onPlay={onPlaySection}
@@ -1054,6 +1079,65 @@ function fmtTime(seconds: number): string {
   const s = Math.floor(rem / 100);
   const hh = rem % 100;
   return `${m}:${s.toString().padStart(2, "0")}.${hh.toString().padStart(2, "0")}`;
+}
+
+interface BeatsCalibrationCardProps {
+  offsetSec: number;
+  speed: number;
+  onSetOffset: (sec: number) => void;
+  onSetSpeed: (speed: number) => void;
+}
+
+function BeatsCalibrationCard({
+  offsetSec,
+  speed,
+  onSetOffset,
+  onSetSpeed,
+}: BeatsCalibrationCardProps) {
+  const [collapsed, setCollapsed] = useState(true);
+  return (
+    <Box
+      p="3"
+      borderWidth="1px"
+      borderColor="border"
+      borderRadius="l3"
+      display="flex"
+      flexDirection="column"
+      gap="2"
+    >
+      <styled.button
+        type="button"
+        onClick={() => setCollapsed((v) => !v)}
+        aria-expanded={!collapsed}
+        aria-label={collapsed ? "expand beat grid" : "collapse beat grid"}
+        display="flex"
+        alignItems="center"
+        gap="1"
+        bg="transparent"
+        border="0"
+        p="0"
+        cursor="pointer"
+        fontSize="sm"
+        fontWeight="semibold"
+        color="inherit"
+      >
+        <styled.span display="inline-block" width="3" textAlign="center">
+          {collapsed ? "▸" : "▾"}
+        </styled.span>
+        Beat grid
+      </styled.button>
+      {!collapsed && (
+        <>
+          <OffsetControls
+            offsetSec={offsetSec}
+            onSetOffset={onSetOffset}
+            label="Beats offset"
+          />
+          <SpeedControls speed={speed} onSetSpeed={onSetSpeed} label="Beats speed" />
+        </>
+      )}
+    </Box>
+  );
 }
 
 interface TabSourceCardProps {
@@ -1355,10 +1439,16 @@ function TranscribeProgress({ progress, stage }: TranscribeProgressProps) {
 interface OffsetControlsProps {
   offsetSec: number;
   onSetOffset: (sec: number) => void;
-  onAlignToPlayhead: () => void;
+  onAlignToPlayhead?: () => void;
+  label?: string;
 }
 
-function OffsetControls({ offsetSec, onSetOffset, onAlignToPlayhead }: OffsetControlsProps) {
+function OffsetControls({
+  offsetSec,
+  onSetOffset,
+  onAlignToPlayhead,
+  label = "MIDI offset",
+}: OffsetControlsProps) {
   // Mirror the value to a string locally so the user can clear / type a
   // sign without us snapping it back on every keystroke.
   const [text, setText] = useState(offsetSec.toFixed(2));
@@ -1381,7 +1471,7 @@ function OffsetControls({ offsetSec, onSetOffset, onAlignToPlayhead }: OffsetCon
   return (
     <HStack gap="2" alignItems="center" flexWrap="wrap">
       <styled.span fontSize="xs" opacity="0.7" minWidth="56px">
-        MIDI offset
+        {label}
       </styled.span>
       <Button
         size="xs"
@@ -1423,9 +1513,11 @@ function OffsetControls({ offsetSec, onSetOffset, onAlignToPlayhead }: OffsetCon
       >
         +50 ms
       </Button>
-      <Button size="xs" variant="outline" onClick={onAlignToPlayhead}>
-        Align to playhead
-      </Button>
+      {onAlignToPlayhead && (
+        <Button size="xs" variant="outline" onClick={onAlignToPlayhead}>
+          Align to playhead
+        </Button>
+      )}
       {offsetSec !== 0 && (
         <Button size="xs" variant="outline" onClick={() => onSetOffset(0)}>
           Reset
@@ -1480,9 +1572,10 @@ function AutoMatchRow({ onAutoMatch }: AutoMatchRowProps) {
 interface SpeedControlsProps {
   speed: number;
   onSetSpeed: (speed: number) => void;
+  label?: string;
 }
 
-function SpeedControls({ speed, onSetSpeed }: SpeedControlsProps) {
+function SpeedControls({ speed, onSetSpeed, label = "MIDI speed" }: SpeedControlsProps) {
   // Display + edit as percent (100 = native) — easier on the ear than
   // raw multipliers — but we round to 2 decimal places under the hood.
   const [text, setText] = useState((speed * 100).toFixed(2));
@@ -1505,7 +1598,7 @@ function SpeedControls({ speed, onSetSpeed }: SpeedControlsProps) {
   return (
     <HStack gap="2" alignItems="center" flexWrap="wrap">
       <styled.span fontSize="xs" opacity="0.7" minWidth="56px">
-        MIDI speed
+        {label}
       </styled.span>
       <Button size="xs" variant="outline" onClick={() => nudge(-0.005)} aria-label="slow midi 0.5%">
         −0.5%

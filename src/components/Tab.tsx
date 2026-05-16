@@ -4,7 +4,7 @@ import { Box, HStack, styled, VStack } from "styled-system/jsx";
 import { css } from "styled-system/css";
 import { type StemEngine } from "@/audio/engine";
 import { estimateKey } from "@/audio/key";
-import { loadBassNotes, pitchName, type BassNote } from "@/audio/midi";
+import { loadBassNotes, pitchName, type Articulation, type BassNote } from "@/audio/midi";
 import { Portal } from "@ark-ui/react/portal";
 import { Button, Popover } from "@/components/ui";
 import {
@@ -125,6 +125,20 @@ export function Tab({
   );
   const displayNotes = useMemo(() => applyEdits(optimizerNotes, edits), [optimizerNotes, edits]);
 
+  // Apply the user's beat-grid calibration (offset + speed) to the
+  // detected beats. Downstream — bar lines, beam groups, snap-to-16th —
+  // just sees the corrected times, so it's a single transformation point.
+  const beatsOffsetSec = edits.beatsOffsetSec ?? 0;
+  const beatsSpeed = edits.beatsSpeed && edits.beatsSpeed > 0 ? edits.beatsSpeed : 1;
+  const adjustedBeats = useMemo<BeatsPayload | null>(() => {
+    if (!beats) return null;
+    if (beatsOffsetSec === 0 && beatsSpeed === 1) return beats;
+    return {
+      tempo_bpm: beats.tempo_bpm * beatsSpeed,
+      beats: beats.beats.map((t) => t / beatsSpeed + beatsOffsetSec),
+    };
+  }, [beats, beatsOffsetSec, beatsSpeed]);
+
   if (status === "loading") {
     return (
       <Box mt="3" opacity="0.7" fontSize="sm">
@@ -143,7 +157,7 @@ export function Tab({
   return (
     <TabSurface
       tabNotes={displayNotes}
-      beats={beats!}
+      beats={adjustedBeats!}
       engine={engine}
       durationSec={durationSec}
       sections={edits.sections}
@@ -1548,8 +1562,46 @@ function TabSystemRow({
                 fill={isSelected ? "var(--colors-tomato-1)" : "var(--colors-indigo-11)"}
                 style={{ fontVariantNumeric: "tabular-nums" }}
               >
-                {n.fret}
+                {n.articulation?.ghost ? `(${n.fret})` : n.fret}
               </text>
+              {n.articulation?.accent && (
+                <text
+                  x={x}
+                  y={y - 10}
+                  fontSize="11"
+                  textAnchor="middle"
+                  fontWeight="600"
+                  fill="var(--colors-tomato-11)"
+                >
+                  {">"}
+                </text>
+              )}
+              {n.articulation?.staccato && (
+                <circle cx={x} cy={y - 12} r={1.6} fill="var(--colors-indigo-11)" />
+              )}
+              {n.articulation?.harmonic && (
+                <g
+                  stroke="var(--colors-indigo-11)"
+                  fill="none"
+                  strokeWidth={1}
+                  pointerEvents="none"
+                >
+                  <polygon points={`${x - 4},${y} ${x},${y - 4} ${x + 4},${y} ${x},${y + 4}`} />
+                </g>
+              )}
+              {n.articulation?.palmMute && (
+                <text
+                  x={x}
+                  y={y - 13}
+                  fontSize="9"
+                  textAnchor="middle"
+                  fontWeight="600"
+                  fill="var(--colors-fg-muted)"
+                  pointerEvents="none"
+                >
+                  P.M.
+                </text>
+              )}
               {glyph.dotted && (
                 <circle cx={x + 8} cy={y + 1} r={1.4} fill="var(--colors-indigo-11)" />
               )}
@@ -1959,6 +2011,44 @@ function NoteEditPopover({ note, anchorX, anchorY, onEdit, onClose }: NoteEditPo
                     );
                   })
                 )}
+              </HStack>
+              <styled.div fontSize="xs" opacity="0.7" mb="1">
+                articulation
+              </styled.div>
+              <HStack gap="1" flexWrap="wrap" mb="3">
+                {(
+                  [
+                    ["staccato", "Stacc."],
+                    ["accent", "Accent"],
+                    ["ghost", "Ghost"],
+                    ["palmMute", "P.M."],
+                    ["harmonic", "Harm."],
+                  ] as const
+                ).map(([flag, label]) => {
+                  const on = !!note.articulation?.[flag];
+                  return (
+                    <Button
+                      key={flag}
+                      size="xs"
+                      variant={on ? "solid" : "outline"}
+                      onClick={() => {
+                        const next: Articulation = { ...note.articulation };
+                        if (on) delete next[flag];
+                        else next[flag] = true;
+                        const cleaned = Object.keys(next).length > 0 ? next : undefined;
+                        onEdit({
+                          kind: "replace",
+                          id,
+                          string: note.string,
+                          fret: note.fret,
+                          ...(cleaned ? { articulation: cleaned } : {}),
+                        });
+                      }}
+                    >
+                      {label}
+                    </Button>
+                  );
+                })}
               </HStack>
               <HStack gap="1" justifyContent="space-between">
                 <HStack gap="1">

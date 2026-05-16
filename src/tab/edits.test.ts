@@ -322,12 +322,34 @@ describe("applyNoteEditsToBass", () => {
       { p: 42, t: 0.5, v: 0.8 },
     ]);
   });
-  test("ignores replace ops (fingering-only, no playback effect)", () => {
+  test("ignores replace ops' string/fret (fingering-only, no playback effect)", () => {
     const notes = [bn(0, 40)];
     const out = applyNoteEditsToBass(notes, [
       { kind: "replace", id: noteId(0, 40), string: 1, fret: 5 },
     ]);
     expect(out).toEqual(notes);
+  });
+
+  test("replace ops carry articulation onto the bass note", () => {
+    const notes = [bn(0, 40)];
+    const out = applyNoteEditsToBass(notes, [
+      {
+        kind: "replace",
+        id: noteId(0, 40),
+        string: 1,
+        fret: 5,
+        articulation: { palmMute: true, staccato: true },
+      },
+    ]);
+    expect(out[0].articulation).toEqual({ palmMute: true, staccato: true });
+  });
+
+  test("replace without articulation clears any earlier articulation on the note", () => {
+    const notes: BassNote[] = [{ ...bn(0, 40), articulation: { accent: true } }];
+    const out = applyNoteEditsToBass(notes, [
+      { kind: "replace", id: noteId(0, 40), string: 0, fret: 0 },
+    ]);
+    expect(out[0].articulation).toBeUndefined();
   });
 });
 

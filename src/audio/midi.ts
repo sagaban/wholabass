@@ -1,6 +1,25 @@
 import { invoke } from "@tauri-apps/api/core";
 import { Midi } from "@tonejs/midi";
 
+/**
+ * Per-note playing technique flags. All optional, all combinable
+ * (palm-mute + staccato, ghost + slide, etc. — the synth applies each
+ * independently). Keep this a plain flag record (not a union) so the
+ * editor UI can toggle each one without affecting the others.
+ */
+export interface Articulation {
+  /** Cut the note short (≈30% of nominal duration). */
+  staccato?: true;
+  /** Boost peak gain. */
+  accent?: true;
+  /** Very quiet, percussive — written as (5) on tab. */
+  ghost?: true;
+  /** Shortened body + duller tone — "P.M." bracket. */
+  palmMute?: true;
+  /** Natural/artificial harmonic — +12 semitones, sine wave. */
+  harmonic?: true;
+}
+
 export interface BassNote {
   /** MIDI pitch number (0-127). Bass typically lives in E1=28 .. G4=67. */
   pitch: number;
@@ -10,6 +29,8 @@ export interface BassNote {
   durSec: number;
   /** Normalised velocity 0..1. */
   velocity: number;
+  /** Optional playing technique flags (see `Articulation`). */
+  articulation?: Articulation;
 }
 
 /** MIDI pitch → name + octave (e.g., 60 → "C4", 28 → "E1"). */

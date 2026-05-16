@@ -12,7 +12,7 @@
  * underlying MIDI is re-transcribed.
  */
 
-import type { BassNote } from "@/audio/midi";
+import type { Articulation, BassNote } from "@/audio/midi";
 import type { TabNote } from "@/tab/optimizer";
 
 export const EDITS_VERSION = 1;
@@ -34,7 +34,18 @@ export interface CutSpan {
 }
 
 export type EditOp =
-  | { kind: "replace"; id: NoteId; string: number; fret: number }
+  | {
+      kind: "replace";
+      id: NoteId;
+      string: number;
+      fret: number;
+      /**
+       * Optional playing-technique flags. Carried alongside string/fret
+       * so toggling an articulation on a note "locks in" its current
+       * fingering — the user can re-pick the fret later if they want.
+       */
+      articulation?: Articulation;
+    }
   | { kind: "delete"; id: NoteId }
   | {
       kind: "add";
@@ -45,6 +56,7 @@ export type EditOp =
       string: number;
       fret: number;
       velocity?: number;
+      articulation?: Articulation;
     };
 
 export interface SectionLabel {
@@ -127,6 +139,18 @@ export interface EditsFile {
    * Applied as: `songT = midiT / midiSpeed + midiOffsetSec`.
    */
   midiSpeed?: number;
+  /**
+   * Song-time shift applied to every detected beat. Lets the user
+   * realign the bar grid when the detector's first beat is early/late.
+   * Default 0; can be negative.
+   */
+  beatsOffsetSec?: number;
+  /**
+   * Playback-rate multiplier for the beat grid relative to the audio.
+   * 1.0 = use the detected beats as-is; >1 squashes them together
+   * (bars finish sooner). Applied as: `songT = beatT / beatsSpeed + beatsOffsetSec`.
+   */
+  beatsSpeed?: number;
   /** Free-form lyrics + chord text, displayed in the side panel. */
   lyrics?: string;
   /**
@@ -290,6 +314,7 @@ export function applyEdits(notes: readonly TabNote[], edits: EditsFile): TabNote
         velocity: op.velocity ?? 1,
         string: op.string,
         fret: op.fret,
+        ...(op.articulation ? { articulation: op.articulation } : {}),
       });
     }
   }
@@ -300,7 +325,10 @@ export function applyEdits(notes: readonly TabNote[], edits: EditsFile): TabNote
     if (deleteIds.has(id)) continue;
     const r = replaceById.get(id);
     if (r) {
-      out.push({ ...n, string: r.string, fret: r.fret });
+      const merged: TabNote = { ...n, string: r.string, fret: r.fret };
+      if (r.articulation) merged.articulation = r.articulation;
+      else if ("articulation" in r) delete merged.articulation;
+      out.push(merged);
     } else {
       out.push(n);
     }
@@ -323,22 +351,38 @@ export function applyNoteEditsToBass(
 ): BassNote[] {
   if (ops.length === 0) return notes.slice();
   const deleteIds = new Set<NoteId>();
+  const articulationById = new Map<NoteId, Articulation | undefined>();
   const additions: BassNote[] = [];
   for (const op of ops) {
     if (op.kind === "delete") deleteIds.add(op.id);
-    else if (op.kind === "add") {
+    else if (op.kind === "replace") {
+      // String/fret are fingering-only; ignored for synth. We do honour
+      // the articulation field so palm-mute / staccato / accent / ghost /
+      // harmonic toggles flow into playback.
+      articulationById.set(op.id, op.articulation);
+    } else if (op.kind === "add") {
       additions.push({
         pitch: op.pitch,
         startSec: op.startSec,
         durSec: op.durSec,
         velocity: op.velocity ?? 1,
+        ...(op.articulation ? { articulation: op.articulation } : {}),
       });
     }
   }
   const out: BassNote[] = [];
   for (const n of notes) {
-    if (deleteIds.has(noteId(n.startSec, n.pitch))) continue;
-    out.push(n);
+    const id = noteId(n.startSec, n.pitch);
+    if (deleteIds.has(id)) continue;
+    if (articulationById.has(id)) {
+      const art = articulationById.get(id);
+      const next: BassNote = { ...n };
+      if (art) next.articulation = art;
+      else delete next.articulation;
+      out.push(next);
+    } else {
+      out.push(n);
+    }
   }
   for (const n of additions) out.push(n);
   out.sort((a, b) => a.startSec - b.startSec);
@@ -364,7 +408,10 @@ export function upsertEdit(ops: readonly EditOp[], next: EditOp): EditOp[] {
     return [...filtered, next];
   }
   if (next.kind === "replace" && existing?.kind === "add") {
-    return [...filtered, { ...existing, string: next.string, fret: next.fret }];
+    const merged = { ...existing, string: next.string, fret: next.fret };
+    if (next.articulation) merged.articulation = next.articulation;
+    else delete merged.articulation;
+    return [...filtered, merged];
   }
   return [...filtered, next];
 }

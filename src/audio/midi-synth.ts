@@ -11,7 +11,7 @@
  * unit-tested without Web Audio.
  */
 
-import type { BassNote } from "@/audio/midi";
+import type { Articulation, BassNote } from "@/audio/midi";
 
 export interface ScheduledEvent {
   pitch: number;
@@ -21,6 +21,8 @@ export interface ScheduledEvent {
   ctxEnd: number;
   /** Peak gain after attack, in 0..1 (already scaled by velocity). */
   peakGain: number;
+  /** Per-note technique flags forwarded by the synth's `spawn()`. */
+  articulation?: Articulation;
 }
 
 export interface ScheduleParams {
@@ -66,8 +68,34 @@ export function notesToSchedule(
     const songEndFromOffset = Math.max(songStartFromOffset, noteEnd - songOffset);
     const evtStart = ctxStart + songStartFromOffset / tempo;
     const evtEnd = ctxStart + songEndFromOffset / tempo;
-    const peakGain = PEAK_GAIN_SCALE * Math.max(VELOCITY_FLOOR, Math.min(1, n.velocity));
-    out.push({ pitch: n.pitch, ctxStart: evtStart, ctxEnd: evtEnd, peakGain });
+    // Articulation-driven gain + duration scaling. Ghost is very quiet
+    // and brief; accent boosts; staccato truncates the body. palmMute
+    // also shortens the body (and the spawn() side dulls the tone).
+    const a = n.articulation;
+    let gainMul = 1;
+    if (a?.ghost) gainMul *= 0.3;
+    if (a?.accent) gainMul *= 1.4;
+    const peakGain =
+      PEAK_GAIN_SCALE * Math.max(VELOCITY_FLOOR, Math.min(1, n.velocity)) * gainMul;
+    let scaledEnd = evtEnd;
+    if (a?.staccato) {
+      scaledEnd = evtStart + (evtEnd - evtStart) * 0.3;
+    } else if (a?.palmMute) {
+      const body = evtEnd - evtStart;
+      scaledEnd = evtStart + Math.min(body, 0.2 / tempo);
+    } else if (a?.ghost) {
+      scaledEnd = evtStart + Math.min(evtEnd - evtStart, 0.12 / tempo);
+    }
+    // Harmonics are nominally an octave up — easy way to get the bright
+    // "bell" tone without needing fret-position-specific math.
+    const pitch = a?.harmonic ? n.pitch + 12 : n.pitch;
+    out.push({
+      pitch,
+      ctxStart: evtStart,
+      ctxEnd: scaledEnd,
+      peakGain,
+      ...(a ? { articulation: a } : {}),
+    });
   }
   return out;
 }
@@ -156,30 +184,38 @@ export class MidiSynth {
   }
 
   private spawn(evt: ScheduledEvent): void {
+    const a = evt.articulation;
     const freq = midiToFreq(evt.pitch);
     const subFreq = midiToFreq(evt.pitch - 12);
 
-    // Main oscillator — sawtooth gives the harmonic richness a real
-    // electric bass needs; the lowpass below tames the top.
+    // Main oscillator. Harmonics swap the sawtooth for a sine to get the
+    // bell-like timbre; the +12 semitone shift is already in evt.pitch.
     const src = this.ctx.createOscillator();
-    src.type = "sawtooth";
+    src.type = a?.harmonic ? "sine" : "sawtooth";
     src.frequency.setValueAtTime(freq, evt.ctxStart);
 
-    // Sub oscillator — sine an octave down for thickness, mixed in below
-    // unity so the fundamental doesn't dominate everything else.
+    // Sub oscillator — sine an octave down for thickness. Muted for
+    // harmonics (the whole point is a thin, glassy tone).
     const sub = this.ctx.createOscillator();
     sub.type = "sine";
     sub.frequency.setValueAtTime(subFreq, evt.ctxStart);
     const subGain = this.ctx.createGain();
-    subGain.gain.setValueAtTime(SUB_GAIN_SCALE, evt.ctxStart);
+    const subLevel = a?.harmonic ? 0 : a?.palmMute ? SUB_GAIN_SCALE * 0.5 : SUB_GAIN_SCALE;
+    subGain.gain.setValueAtTime(subLevel, evt.ctxStart);
 
     // Lowpass with a percussive attack on cutoff — closed-mouth at the
     // start, decays quickly to a warm body level for sustained notes.
+    // Palm-mute halves both cutoffs so the body sits darker; the user's
+    // fret hand is "choking" the strings, after all.
+    const muteScale = a?.palmMute ? 0.5 : 1;
     const filter = this.ctx.createBiquadFilter();
     filter.type = "lowpass";
     filter.Q.setValueAtTime(FILTER_Q, evt.ctxStart);
-    filter.frequency.setValueAtTime(FILTER_ATTACK_HZ, evt.ctxStart);
-    filter.frequency.exponentialRampToValueAtTime(FILTER_BODY_HZ, evt.ctxStart + FILTER_DECAY_SEC);
+    filter.frequency.setValueAtTime(FILTER_ATTACK_HZ * muteScale, evt.ctxStart);
+    filter.frequency.exponentialRampToValueAtTime(
+      FILTER_BODY_HZ * muteScale,
+      evt.ctxStart + FILTER_DECAY_SEC,
+    );
 
     // Amplitude envelope: short attack → peak → small decay to a 70%
     // sustain → release on note end. linearRampToValueAtTime can't ramp

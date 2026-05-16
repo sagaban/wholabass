@@ -63,6 +63,30 @@ describe("notesToSchedule", () => {
     expect(notesToSchedule([note(0, 1)], { songOffset: 0, ctxStart: 0, tempo: 0 })).toEqual([]);
   });
 
+  test("articulations adjust peakGain, end, pitch as expected", () => {
+    const n: BassNote = { startSec: 0, durSec: 1, pitch: 40, velocity: 1 };
+    const make = (a: BassNote["articulation"]) =>
+      notesToSchedule([{ ...n, articulation: a }], { songOffset: 0, ctxStart: 0, tempo: 1 })[0];
+    const plain = notesToSchedule([n], { songOffset: 0, ctxStart: 0, tempo: 1 })[0];
+
+    const accent = make({ accent: true });
+    expect(accent.peakGain).toBeCloseTo(plain.peakGain * 1.4, 6);
+
+    const ghost = make({ ghost: true });
+    // ghost reduces gain and shortens body to ≤ 0.12s
+    expect(ghost.peakGain).toBeCloseTo(plain.peakGain * 0.3, 6);
+    expect(ghost.ctxEnd).toBeCloseTo(0.12, 6);
+
+    const stacc = make({ staccato: true });
+    expect(stacc.ctxEnd).toBeCloseTo(0.3, 6);
+
+    const pm = make({ palmMute: true });
+    expect(pm.ctxEnd).toBeCloseTo(0.2, 6);
+
+    const harm = make({ harmonic: true });
+    expect(harm.pitch).toBe(n.pitch + 12);
+  });
+
   test("peakGain scales with velocity but has a floor", () => {
     const evts = notesToSchedule(
       [note(0, 0.1, 40, 0.0), note(0.2, 0.1, 40, 0.5), note(0.4, 0.1, 40, 1.0)],
