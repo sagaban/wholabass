@@ -18,7 +18,7 @@ import {
   type PlannedSystem,
 } from "@/tab/render";
 import { DEFAULT_TUNING, enumeratePlacements, fingerNotes, type TabNote } from "@/tab/optimizer";
-import { beamGroups, classifyNote, rhythmGlyph } from "@/tab/rhythm";
+import { beamGroups, classifyDuration, classifyNote, rhythmGlyph } from "@/tab/rhythm";
 import {
   applyCutsToNotes,
   applyEdits,
@@ -1695,6 +1695,28 @@ function TabSystemRow({
               {glyph.dotted && (
                 <circle cx={x + 8} cy={y + 1} r={1.4} fill="var(--colors-indigo-11)" />
               )}
+              {/* Duration bar below the fret box. Drawn only for notes
+                  that don't already get a stem/beam (i.e., quarter and
+                  longer) so whole/half/quarter look visibly different.
+                  Clamped to the row's edge. */}
+              {(() => {
+                if (glyph.shortNote) return null;
+                const endRaw = rowTimeToX(system, n.startSec + n.durSec);
+                const endX = Math.min(endRaw, system.widthPx - 1);
+                if (endX - x < 4) return null;
+                return (
+                  <line
+                    x1={x + 6}
+                    x2={endX - 1}
+                    y1={y + 13}
+                    y2={y + 13}
+                    stroke="var(--colors-fg-muted)"
+                    strokeWidth={1.5}
+                    strokeLinecap="round"
+                    pointerEvents="none"
+                  />
+                );
+              })()}
             </g>
           );
         })}
@@ -2156,6 +2178,34 @@ function NoteEditPopover({
                     </Button>
                   );
                 })}
+                {(() => {
+                  // "·" toggle: ×1.5 → dottedX, /1.5 → undotted. Highlights
+                  // when classifyDuration already lands on a dotted variant.
+                  const kind = classifyDuration(note.durSec, beatSec);
+                  const dotted =
+                    kind === "dottedHalf" || kind === "dottedQuarter" || kind === "dottedEighth";
+                  return (
+                    <Button
+                      key="dur-dot"
+                      size="xs"
+                      variant={dotted ? "solid" : "outline"}
+                      aria-label="toggle dotted"
+                      onClick={() => {
+                        const target = dotted ? note.durSec / 1.5 : note.durSec * 1.5;
+                        onEdit({
+                          kind: "replace",
+                          id,
+                          string: note.string,
+                          fret: note.fret,
+                          ...(note.articulation ? { articulation: note.articulation } : {}),
+                          durSec: target,
+                        });
+                      }}
+                    >
+                      ·
+                    </Button>
+                  );
+                })()}
               </HStack>
               <styled.div fontSize="xs" opacity="0.7" mb="1">
                 articulation
