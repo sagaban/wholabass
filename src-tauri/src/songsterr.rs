@@ -38,16 +38,24 @@ pub struct SongsterrBassResult {
     pub revision: serde_json::Value,
 }
 
+/// Subset of the Songsterr track-metadata blob shape (see
+/// `SongsterrStateMetaCurrentTrack` in the upstream types). Field names
+/// match the JSON payload (camelCase) so the frontend can pass this
+/// straight into the alphaTab converter input.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct SongsterrTrackMeta {
     #[serde(rename = "partId")]
     pub part_id: u64,
-    #[serde(rename = "trackId", default)]
-    pub track_id: Option<u64>,
+    #[serde(rename = "instrumentId", default)]
+    pub instrument_id: Option<i32>,
     #[serde(default)]
-    pub instrument: Option<String>,
+    pub title: Option<String>,
     #[serde(default)]
     pub name: Option<String>,
+    #[serde(default)]
+    pub tuning: Option<Vec<i32>>,
+    #[serde(rename = "isDrums", default)]
+    pub is_drums: Option<bool>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -151,18 +159,27 @@ fn extract_state_meta(html: &str) -> Result<StateMeta, SongsterrError> {
     Ok(StateMeta { song_id, revision_id, image, title, artist, tracks })
 }
 
-/// Songsterr labels bass tracks with `instrument` strings like "bass" or
-/// "Bass Guitar". A few songs use the track's `name` only, so we fall back
-/// to a name match too. First match wins — most songs only have one.
+/// Pick the first bass track. We match on two signals:
+///  1. General-MIDI `instrumentId` in the bass range (32..=39 — acoustic,
+///     electric, fretless, slap, synth bass).
+///  2. Track `name` or `title` containing "bass" (case-insensitive), as a
+///     fallback when `instrumentId` is missing or unconventional.
+///
+/// First match wins, since most songs have a single bass track.
 fn pick_bass_track(tracks: &[SongsterrTrackMeta]) -> Option<&SongsterrTrackMeta> {
     tracks.iter().find(|t| {
-        let s = t
-            .instrument
+        if let Some(id) = t.instrument_id {
+            if (32..=39).contains(&id) {
+                return true;
+            }
+        }
+        let label = t
+            .name
             .as_deref()
-            .or(t.name.as_deref())
+            .or(t.title.as_deref())
             .unwrap_or("")
             .to_ascii_lowercase();
-        s.contains("bass")
+        label.contains("bass")
     })
 }
 
@@ -199,8 +216,8 @@ mod tests {
         let html = r#"<html><head></head><body>
             <script id="state">
             {"meta":{"current":{"songId":42,"revisionId":7,"image":"abc","title":"Test","artist":"Band","tracks":[
-              {"partId":1,"instrument":"vocals","name":"V"},
-              {"partId":2,"instrument":"Bass Guitar","name":"Bass"}
+              {"partId":1,"instrumentId":24,"name":"Guitar"},
+              {"partId":2,"instrumentId":33,"name":"Bass"}
             ]}}}
             </script>
         </body></html>"#;
@@ -215,19 +232,23 @@ mod tests {
     }
 
     #[test]
-    fn pick_bass_track_uses_name_when_instrument_missing() {
+    fn pick_bass_track_uses_name_when_instrument_id_missing() {
         let tracks = vec![
             SongsterrTrackMeta {
                 part_id: 1,
-                track_id: None,
-                instrument: None,
+                instrument_id: None,
+                title: None,
                 name: Some("Lead Guitar".into()),
+                tuning: None,
+                is_drums: None,
             },
             SongsterrTrackMeta {
                 part_id: 2,
-                track_id: None,
-                instrument: None,
+                instrument_id: None,
+                title: None,
                 name: Some("Bass".into()),
+                tuning: None,
+                is_drums: None,
             },
         ];
         let picked = pick_bass_track(&tracks).unwrap();
@@ -235,12 +256,32 @@ mod tests {
     }
 
     #[test]
+    fn pick_bass_track_matches_full_gm_bass_range() {
+        for id in 32..=39 {
+            let tracks = vec![SongsterrTrackMeta {
+                part_id: 9,
+                instrument_id: Some(id),
+                title: None,
+                name: None,
+                tuning: None,
+                is_drums: None,
+            }];
+            assert!(
+                pick_bass_track(&tracks).is_some(),
+                "GM instrumentId {id} should match as bass"
+            );
+        }
+    }
+
+    #[test]
     fn pick_bass_track_returns_none_when_absent() {
         let tracks = vec![SongsterrTrackMeta {
             part_id: 1,
-            track_id: None,
-            instrument: Some("Drums".into()),
-            name: None,
+            instrument_id: Some(0),
+            title: None,
+            name: Some("Piano".into()),
+            tuning: None,
+            is_drums: None,
         }];
         assert!(pick_bass_track(&tracks).is_none());
     }

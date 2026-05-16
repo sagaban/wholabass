@@ -11,6 +11,9 @@ importers:
       '@ark-ui/react':
         specifier: ^5.36.2
         version: 5.36.2(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
+      '@coderline/alphatab':
+        specifier: ^1.8.2
+        version: 1.8.2
       '@fontsource/victor-mono':
         specifier: ^5.2.8
         version: 5.2.8
@@ -100,6 +103,10 @@ packages:
 
   '@clack/prompts@0.11.0':
     resolution: {integrity: sha512-pMN5FcrEw9hUkZA4f+zLlzivQSeQf5dRGJjSUbvVYDLvpKCdQx5OaknvKzgbtXOizhP+SJJJjqEbOe55uKKfAw==}
+
+  '@coderline/alphatab@1.8.2':
+    resolution: {integrity: sha512-Ab11m2IwCdOG+Wbzbv+v4pvJgJnNqw+UjIgKyaTu9TBTWfE7GlOuuElpswkQ2mLB6E4HcOX1FSBopMZdP41B5g==}
+    engines: {node: '>=6.0.0'}
 
   '@csstools/postcss-cascade-layers@6.0.0':
     resolution: {integrity: sha512-WhsECqmrEZQGqaPlBA7JkmF/CJ2/+wetL4fkL9sOPccKd32PQ1qToFM6gqSI5rkpmYqubvbxjEJhyMTHYK0vZQ==}
@@ -2400,6 +2407,8 @@ snapshots:
       '@clack/core': 0.5.0
       picocolors: 1.1.1
       sisteransi: 1.0.5
+
+  '@coderline/alphatab@1.8.2': {}
 
   '@csstools/postcss-cascade-layers@6.0.0(postcss@8.5.6)':
     dependencies:

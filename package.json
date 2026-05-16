@@ -23,6 +23,7 @@
   },
   "dependencies": {
     "@ark-ui/react": "^5.36.2",
+    "@coderline/alphatab": "^1.8.2",
     "@fontsource/victor-mono": "^5.2.8",
     "@soundtouchjs/audio-worklet": "^1.0.10",
     "@tanstack/react-router": "^1.169.1",
