@@ -75,6 +75,11 @@ export function Tab({
   onRippleDelete,
 }: TabProps) {
   const [mappedBass, setMappedBass] = useState<readonly BassNote[]>([]);
+  // Explicit-fingering tab from a Songsterr import (or any future GP7
+  // import). When present, the loader uses it directly instead of
+  // running `fingerNotes` over the MIDI — we know the original tab's
+  // string/fret choice, no guessing needed.
+  const [explicitTab, setExplicitTab] = useState<readonly TabNote[] | null>(null);
   const [beats, setBeats] = useState<BeatsPayload | null>(null);
   const [status, setStatus] = useState<LoadStatus>("loading");
 
@@ -90,17 +95,34 @@ export function Tab({
         // user can upload or auto-transcribe from the Tab source card.
         const b = await invoke<BeatsPayload>("read_beats", { songId });
         const raw = await loadBassNotes(songId).catch(() => [] as BassNote[]);
+        const rawTab = await invoke<readonly TabNote[] | null>("read_bass_tab", {
+          songId,
+        }).catch(() => null);
         if (cancelled) return;
+        const shift = <T extends BassNote>(n: T): T => ({
+          ...n,
+          startSec: n.startSec / midiSpeed + midiOffsetSec,
+          durSec: n.durSec / midiSpeed,
+        });
         const shifted: BassNote[] =
           midiOffsetSec === 0 && midiSpeed === 1
             ? raw.slice()
-            : raw.map((n) => ({
-                pitch: n.pitch,
-                velocity: n.velocity,
-                startSec: n.startSec / midiSpeed + midiOffsetSec,
-                durSec: n.durSec / midiSpeed,
-              }));
+            : raw.map((n) =>
+                shift({
+                  pitch: n.pitch,
+                  velocity: n.velocity,
+                  startSec: n.startSec,
+                  durSec: n.durSec,
+                }),
+              );
         setMappedBass(shifted);
+        // Explicit tab gets the same midi-offset/speed transform so its
+        // notes line up with whatever the user is hearing from bass.mid.
+        const shiftedTab =
+          rawTab && (midiOffsetSec !== 0 || midiSpeed !== 1)
+            ? rawTab.map((n) => shift(n))
+            : (rawTab as TabNote[] | null);
+        setExplicitTab(shiftedTab);
         setBeats(b);
         setStatus("ready");
       } catch (err: unknown) {
@@ -119,11 +141,15 @@ export function Tab({
   // Memoise so the `?? []` fallback doesn't churn the optimizer on
   // every parent render when no cuts exist.
   const cuts = useMemo(() => edits.cuts ?? [], [edits.cuts]);
-  const optimizerNotes = useMemo(
-    () => fingerNotes(applyCutsToNotes(mappedBass, cuts) as readonly BassNote[]),
-    [mappedBass, cuts],
-  );
-  const displayNotes = useMemo(() => applyEdits(optimizerNotes, edits), [optimizerNotes, edits]);
+  const fingeredNotes = useMemo(() => {
+    if (explicitTab) {
+      // Explicit fingering already includes string/fret; cuts still
+      // apply (they're audio-time edits).
+      return applyCutsToNotes(explicitTab, cuts) as TabNote[];
+    }
+    return fingerNotes(applyCutsToNotes(mappedBass, cuts) as readonly BassNote[]);
+  }, [explicitTab, mappedBass, cuts]);
+  const displayNotes = useMemo(() => applyEdits(fingeredNotes, edits), [fingeredNotes, edits]);
 
   // Apply the user's beat-grid calibration (offset + speed) to the
   // detected beats. Downstream — bar lines, beam groups, snap-to-16th —
