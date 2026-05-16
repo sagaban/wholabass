@@ -63,6 +63,43 @@ describe("notesToSchedule", () => {
     expect(notesToSchedule([note(0, 1)], { songOffset: 0, ctxStart: 0, tempo: 0 })).toEqual([]);
   });
 
+  test("slide writes slideToPitch + slideEndCtx from the next note", () => {
+    const notes: BassNote[] = [
+      { startSec: 0, durSec: 0.5, pitch: 40, velocity: 1, articulation: { slide: true } },
+      { startSec: 1, durSec: 0.5, pitch: 45, velocity: 1 },
+    ];
+    const evts = notesToSchedule(notes, { songOffset: 0, ctxStart: 0, tempo: 1 });
+    expect(evts[0].slideToPitch).toBe(45);
+    expect(evts[0].slideEndCtx).toBe(1);
+    // ctxEnd is extended to cover the slide span.
+    expect(evts[0].ctxEnd).toBeGreaterThanOrEqual(1);
+  });
+
+  test("legato sets suppressAttack on the *following* event", () => {
+    const notes: BassNote[] = [
+      { startSec: 0, durSec: 0.5, pitch: 40, velocity: 1, articulation: { legato: true } },
+      { startSec: 0.5, durSec: 0.5, pitch: 42, velocity: 1 },
+    ];
+    const evts = notesToSchedule(notes, { songOffset: 0, ctxStart: 0, tempo: 1 });
+    expect(evts[0].suppressAttack).toBeUndefined();
+    expect(evts[1].suppressAttack).toBe(true);
+  });
+
+  test("bend / vibrato pass through on the articulation field", () => {
+    const notes: BassNote[] = [
+      {
+        startSec: 0,
+        durSec: 1,
+        pitch: 40,
+        velocity: 1,
+        articulation: { bend: { semitones: 1, release: true }, vibrato: true },
+      },
+    ];
+    const [evt] = notesToSchedule(notes, { songOffset: 0, ctxStart: 0, tempo: 1 });
+    expect(evt.articulation?.bend).toEqual({ semitones: 1, release: true });
+    expect(evt.articulation?.vibrato).toBe(true);
+  });
+
   test("articulations adjust peakGain, end, pitch as expected", () => {
     const n: BassNote = { startSec: 0, durSec: 1, pitch: 40, velocity: 1 };
     const make = (a: BassNote["articulation"]) =>

@@ -18,6 +18,20 @@ export interface Articulation {
   palmMute?: true;
   /** Natural/artificial harmonic — +12 semitones, sine wave. */
   harmonic?: true;
+  /**
+   * Glide pitch from this note to the next note's pitch over the gap
+   * between them. Tab shows a diagonal connector to the next fret.
+   */
+  slide?: true;
+  /**
+   * Hammer-on / pull-off into the *next* note — the next note is sounded
+   * without its own attack envelope. Rendered as a curved tie.
+   */
+  legato?: true;
+  /** Pitch bend up by `semitones`; optionally release back to pitch. */
+  bend?: { semitones: number; release?: boolean };
+  /** Subtle pitch wobble across the note's body (fixed 30¢ / 6 Hz). */
+  vibrato?: true;
 }
 
 export interface BassNote {

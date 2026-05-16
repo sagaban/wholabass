@@ -23,6 +23,18 @@ export interface ScheduledEvent {
   peakGain: number;
   /** Per-note technique flags forwarded by the synth's `spawn()`. */
   articulation?: Articulation;
+  /**
+   * If set, glide src/sub frequency from `pitch` to `slideToPitch` over
+   * the span [ctxStart, slideEndCtx]. `ctxEnd` is extended to at least
+   * `slideEndCtx` so the gliding tone keeps ringing into the next note.
+   */
+  slideToPitch?: number;
+  slideEndCtx?: number;
+  /**
+   * Previous note carried a `legato` flag — skip this note's attack so
+   * it plays straight into the peak gain (hammer-on / pull-off).
+   */
+  suppressAttack?: boolean;
 }
 
 export interface ScheduleParams {
@@ -60,7 +72,8 @@ export function notesToSchedule(
   const { songOffset, ctxStart, tempo, songEnd } = params;
   if (tempo <= 0) return [];
   const out: ScheduledEvent[] = [];
-  for (const n of notes) {
+  for (let i = 0; i < notes.length; i++) {
+    const n = notes[i];
     const noteEnd = n.startSec + n.durSec;
     if (noteEnd <= songOffset) continue;
     if (songEnd !== undefined && n.startSec >= songEnd) continue;
@@ -89,12 +102,35 @@ export function notesToSchedule(
     // Harmonics are nominally an octave up — easy way to get the bright
     // "bell" tone without needing fret-position-specific math.
     const pitch = a?.harmonic ? n.pitch + 12 : n.pitch;
+
+    // Slide: glide src/sub frequency into the *next* note's pitch over
+    // the gap between them. Extend ctxEnd so the gliding tone keeps
+    // ringing into the next note's start (a tiny overlap is intentional).
+    const next = notes[i + 1];
+    let slideToPitch: number | undefined;
+    let slideEndCtx: number | undefined;
+    let finalEnd = scaledEnd;
+    if (a?.slide && next) {
+      const nextStartFromOffset = Math.max(0, next.startSec - songOffset);
+      const nextStartCtx = ctxStart + nextStartFromOffset / tempo;
+      slideToPitch = next.articulation?.harmonic ? next.pitch + 12 : next.pitch;
+      slideEndCtx = nextStartCtx;
+      finalEnd = Math.max(finalEnd, nextStartCtx);
+    }
+
+    // Legato: previous note carries the flag; we (the next note) suppress
+    // our own attack so it sounds like one continuous tone.
+    const prev = notes[i - 1];
+    const suppressAttack = !!prev?.articulation?.legato;
+
     out.push({
       pitch,
       ctxStart: evtStart,
-      ctxEnd: scaledEnd,
+      ctxEnd: finalEnd,
       peakGain,
       ...(a ? { articulation: a } : {}),
+      ...(slideToPitch !== undefined ? { slideToPitch, slideEndCtx } : {}),
+      ...(suppressAttack ? { suppressAttack: true } : {}),
     });
   }
   return out;
@@ -199,6 +235,33 @@ export class MidiSynth {
     const sub = this.ctx.createOscillator();
     sub.type = "sine";
     sub.frequency.setValueAtTime(subFreq, evt.ctxStart);
+
+    // Slide: linearly ramp both oscillators to the next note's pitch
+    // over the gap so the listener hears one continuous glide.
+    if (evt.slideToPitch !== undefined && evt.slideEndCtx !== undefined) {
+      const targetFreq = midiToFreq(evt.slideToPitch);
+      const targetSubFreq = midiToFreq(evt.slideToPitch - 12);
+      src.frequency.linearRampToValueAtTime(targetFreq, evt.slideEndCtx);
+      sub.frequency.linearRampToValueAtTime(targetSubFreq, evt.slideEndCtx);
+    }
+
+    // Bend: ramp up by `semitones` over the first ⅓ of the body, hold,
+    // and optionally release back over the last ⅓.
+    if (a?.bend) {
+      const body = Math.max(0.05, evt.ctxEnd - evt.ctxStart);
+      const bendFreq = freq * Math.pow(2, a.bend.semitones / 12);
+      const bendSubFreq = subFreq * Math.pow(2, a.bend.semitones / 12);
+      const peakTime = evt.ctxStart + body / 3;
+      src.frequency.linearRampToValueAtTime(bendFreq, peakTime);
+      sub.frequency.linearRampToValueAtTime(bendSubFreq, peakTime);
+      if (a.bend.release) {
+        const releaseStart = evt.ctxEnd - body / 3;
+        src.frequency.setValueAtTime(bendFreq, releaseStart);
+        sub.frequency.setValueAtTime(bendSubFreq, releaseStart);
+        src.frequency.linearRampToValueAtTime(freq, evt.ctxEnd);
+        sub.frequency.linearRampToValueAtTime(subFreq, evt.ctxEnd);
+      }
+    }
     const subGain = this.ctx.createGain();
     const subLevel = a?.harmonic ? 0 : a?.palmMute ? SUB_GAIN_SCALE * 0.5 : SUB_GAIN_SCALE;
     subGain.gain.setValueAtTime(subLevel, evt.ctxStart);
@@ -220,15 +283,35 @@ export class MidiSynth {
     // Amplitude envelope: short attack → peak → small decay to a 70%
     // sustain → release on note end. linearRampToValueAtTime can't ramp
     // to 0, so the release uses setTargetAtTime via two ramps instead.
+    // Legato (hammer-on / pull-off into this note): skip the attack so
+    // the previous tone flows in without a re-pluck.
     const gain = this.ctx.createGain();
     const peak = evt.peakGain;
     const sustain = peak * 0.7;
     const bodyEnd = Math.max(evt.ctxStart + ATTACK_SEC + 0.05, evt.ctxEnd);
-    gain.gain.setValueAtTime(0, evt.ctxStart);
-    gain.gain.linearRampToValueAtTime(peak, evt.ctxStart + ATTACK_SEC);
-    gain.gain.linearRampToValueAtTime(sustain, evt.ctxStart + ATTACK_SEC + 0.08);
+    if (evt.suppressAttack) {
+      gain.gain.setValueAtTime(sustain, evt.ctxStart);
+    } else {
+      gain.gain.setValueAtTime(0, evt.ctxStart);
+      gain.gain.linearRampToValueAtTime(peak, evt.ctxStart + ATTACK_SEC);
+      gain.gain.linearRampToValueAtTime(sustain, evt.ctxStart + ATTACK_SEC + 0.08);
+    }
     gain.gain.setValueAtTime(sustain, bodyEnd);
     gain.gain.linearRampToValueAtTime(0, bodyEnd + RELEASE_SEC);
+
+    // Vibrato: a 6 Hz sine LFO driving src.detune by 30 cents adds the
+    // characteristic pitch wobble. Routed through detune (not frequency)
+    // so it composes cleanly with any frequency ramps from slide/bend.
+    let lfo: OscillatorNode | undefined;
+    if (a?.vibrato) {
+      lfo = this.ctx.createOscillator();
+      lfo.type = "sine";
+      lfo.frequency.setValueAtTime(6, evt.ctxStart);
+      const lfoGain = this.ctx.createGain();
+      lfoGain.gain.setValueAtTime(30, evt.ctxStart);
+      lfo.connect(lfoGain).connect(src.detune);
+      lfoGain.connect(sub.detune);
+    }
 
     src.connect(filter);
     sub.connect(subGain).connect(filter);
@@ -240,6 +323,10 @@ export class MidiSynth {
     const stopAt = bodyEnd + RELEASE_SEC + 0.01;
     src.stop(stopAt);
     sub.stop(stopAt);
+    if (lfo) {
+      lfo.start(evt.ctxStart);
+      lfo.stop(stopAt);
+    }
 
     const voice: ActiveVoice = { src, sub, gain };
     src.addEventListener(

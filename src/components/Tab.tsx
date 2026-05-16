@@ -1517,7 +1517,7 @@ function TabSystemRow({
         ))}
 
         {/* Fret numbers — click to edit */}
-        {notes.map((n) => {
+        {notes.map((n, i) => {
           const x = rowTimeToX(system, n.startSec);
           const y = stringIndexToY(n.string, layout);
           const glyph = rhythmGlyph(classifyNote(n, beats.beats));
@@ -1525,6 +1525,11 @@ function TabSystemRow({
           const isPopoverTarget = selectedNote ? id === tabNoteId(selectedNote) : false;
           const isInSelection = selection.has(id);
           const isSelected = isPopoverTarget || isInSelection;
+          // Slide / legato connectors only draw when the next note also
+          // lives in this row — cross-row glides are too rare to chase.
+          const nextInRow = notes[i + 1];
+          const nextX = nextInRow ? rowTimeToX(system, nextInRow.startSec) : null;
+          const nextY = nextInRow ? stringIndexToY(nextInRow.string, layout) : null;
           return (
             <g
               key={id}
@@ -1601,6 +1606,47 @@ function TabSystemRow({
                 >
                   P.M.
                 </text>
+              )}
+              {n.articulation?.slide && nextX !== null && nextY !== null && (
+                <line
+                  x1={x + 7}
+                  y1={y}
+                  x2={nextX - 7}
+                  y2={nextY}
+                  stroke="var(--colors-indigo-9)"
+                  strokeWidth={1.5}
+                  pointerEvents="none"
+                />
+              )}
+              {n.articulation?.legato && nextX !== null && nextY !== null && (
+                <path
+                  d={`M ${x},${y - 11} Q ${(x + nextX) / 2},${y - 20} ${nextX},${nextY - 11}`}
+                  stroke="var(--colors-indigo-11)"
+                  strokeWidth={1.2}
+                  fill="none"
+                  pointerEvents="none"
+                />
+              )}
+              {n.articulation?.bend && (
+                <text
+                  x={x + 8}
+                  y={y - 11}
+                  fontSize="9"
+                  fontWeight="600"
+                  fill="var(--colors-tomato-11)"
+                  pointerEvents="none"
+                >
+                  ↑{n.articulation.bend.semitones === 0.5 ? "½" : n.articulation.bend.semitones}
+                </text>
+              )}
+              {n.articulation?.vibrato && (
+                <path
+                  d={`M ${x - 6},${y + 12} q 2,-3 4,0 t 4,0 t 4,0`}
+                  stroke="var(--colors-indigo-11)"
+                  strokeWidth={1}
+                  fill="none"
+                  pointerEvents="none"
+                />
               )}
               {glyph.dotted && (
                 <circle cx={x + 8} cy={y + 1} r={1.4} fill="var(--colors-indigo-11)" />
@@ -2015,7 +2061,7 @@ function NoteEditPopover({ note, anchorX, anchorY, onEdit, onClose }: NoteEditPo
               <styled.div fontSize="xs" opacity="0.7" mb="1">
                 articulation
               </styled.div>
-              <HStack gap="1" flexWrap="wrap" mb="3">
+              <HStack gap="1" flexWrap="wrap" mb="2">
                 {(
                   [
                     ["staccato", "Stacc."],
@@ -2023,6 +2069,9 @@ function NoteEditPopover({ note, anchorX, anchorY, onEdit, onClose }: NoteEditPo
                     ["ghost", "Ghost"],
                     ["palmMute", "P.M."],
                     ["harmonic", "Harm."],
+                    ["slide", "Slide→"],
+                    ["legato", "Legato→"],
+                    ["vibrato", "Vibrato"],
                   ] as const
                 ).map(([flag, label]) => {
                   const on = !!note.articulation?.[flag];
@@ -2049,6 +2098,62 @@ function NoteEditPopover({ note, anchorX, anchorY, onEdit, onClose }: NoteEditPo
                     </Button>
                   );
                 })}
+              </HStack>
+              <HStack gap="1" alignItems="center" mb="3">
+                <styled.span fontSize="xs" opacity="0.7">
+                  Bend
+                </styled.span>
+                {([0, 0.5, 1, 1.5, 2] as const).map((semi) => {
+                  const cur = note.articulation?.bend;
+                  const on = semi === 0 ? !cur : cur?.semitones === semi;
+                  const label = semi === 0 ? "—" : semi === 0.5 ? "½" : String(semi);
+                  return (
+                    <Button
+                      key={`bend-${semi}`}
+                      size="xs"
+                      variant={on ? "solid" : "outline"}
+                      onClick={() => {
+                        const next: Articulation = { ...note.articulation };
+                        if (semi === 0) delete next.bend;
+                        else next.bend = { semitones: semi, release: cur?.release };
+                        const cleaned = Object.keys(next).length > 0 ? next : undefined;
+                        onEdit({
+                          kind: "replace",
+                          id,
+                          string: note.string,
+                          fret: note.fret,
+                          ...(cleaned ? { articulation: cleaned } : {}),
+                        });
+                      }}
+                    >
+                      {label}
+                    </Button>
+                  );
+                })}
+                {note.articulation?.bend && (
+                  <Button
+                    size="xs"
+                    variant={note.articulation.bend.release ? "solid" : "outline"}
+                    onClick={() => {
+                      const cur = note.articulation?.bend;
+                      if (!cur) return;
+                      const next: Articulation = {
+                        ...note.articulation,
+                        bend: { semitones: cur.semitones, release: !cur.release },
+                      };
+                      onEdit({
+                        kind: "replace",
+                        id,
+                        string: note.string,
+                        fret: note.fret,
+                        articulation: next,
+                      });
+                    }}
+                    aria-label="bend release back to pitch"
+                  >
+                    rel
+                  </Button>
+                )}
               </HStack>
               <HStack gap="1" justifyContent="space-between">
                 <HStack gap="1">
