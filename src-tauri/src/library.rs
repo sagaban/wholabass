@@ -137,6 +137,17 @@ pub fn edits_path(root: &Path, id: &str) -> PathBuf {
     song_dir(root, id).join("bass.tab.edits.json")
 }
 
+/// `<root>/<id>/bass.tab.json` — explicit-fingering tab written by the
+/// Songsterr import path. When present, the loader prefers this over the
+/// optimizer's guesswork on the MIDI.
+pub fn tab_path(root: &Path, id: &str) -> PathBuf {
+    song_dir(root, id).join("bass.tab.json")
+}
+
+pub fn has_tab(root: &Path, id: &str) -> bool {
+    tab_path(root, id).is_file()
+}
+
 /// Rewrite `<root>/<id>/meta.json` with `processing_version` set to the
 /// supplied value. Used by the retry path when artifacts on disk are
 /// already complete but were produced under an older version — we mark

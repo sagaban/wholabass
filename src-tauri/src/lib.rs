@@ -638,6 +638,50 @@ async fn write_edits(song_id: String, edits: Value, app: AppHandle) -> Result<()
         .map_err(|e| format!("write {}: {e}", path.display()))
 }
 
+/// Read the explicit-fingering tab JSON. Missing file returns null so the
+/// loader can transparently fall back to the optimizer pipeline.
+#[tauri::command]
+async fn read_bass_tab(song_id: String, app: AppHandle) -> Result<Option<Value>, String> {
+    let library_root = library::resolve_root(&app).map_err(|e| e.to_string())?;
+    let path = library::tab_path(&library_root, &song_id);
+    match tokio::fs::read_to_string(&path).await {
+        Ok(text) => Ok(Some(
+            serde_json::from_str(&text).map_err(|e| format!("parse {}: {e}", path.display()))?,
+        )),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(format!("read {}: {err}", path.display())),
+    }
+}
+
+/// Persist explicit-fingering bass tab JSON. Written by the Songsterr
+/// import path alongside the corresponding `bass.mid`.
+#[tauri::command]
+async fn write_bass_tab(song_id: String, tab: Value, app: AppHandle) -> Result<(), String> {
+    let library_root = library::resolve_root(&app).map_err(|e| e.to_string())?;
+    let dir = library::song_dir(&library_root, &song_id);
+    if !dir.is_dir() {
+        return Err(format!("song dir missing for {song_id}"));
+    }
+    let path = library::tab_path(&library_root, &song_id);
+    let bytes = serde_json::to_vec_pretty(&tab).map_err(|e| e.to_string())?;
+    tokio::fs::write(&path, bytes)
+        .await
+        .map_err(|e| format!("write {}: {e}", path.display()))
+}
+
+/// Remove the explicit-fingering tab JSON, e.g. when the user explicitly
+/// re-runs auto-transcription and wants the optimizer to take over again.
+#[tauri::command]
+async fn clear_bass_tab(song_id: String, app: AppHandle) -> Result<(), String> {
+    let library_root = library::resolve_root(&app).map_err(|e| e.to_string())?;
+    let path = library::tab_path(&library_root, &song_id);
+    match tokio::fs::remove_file(&path).await {
+        Ok(()) => Ok(()),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(format!("delete {}: {err}", path.display())),
+    }
+}
+
 async fn take_sidecar(state: &State<'_, AppState>) -> Result<Arc<Sidecar>, String> {
     // The sidecar is spawned in a background task at startup; give it a moment
     // on first call rather than failing immediately if the user is fast.
@@ -727,6 +771,9 @@ pub fn run() {
             drum_onsets,
             read_edits,
             write_edits,
+            read_bass_tab,
+            write_bass_tab,
+            clear_bass_tab,
             models_status,
             fetch_songsterr_bass
         ])
