@@ -205,7 +205,12 @@ export function LibraryScreen() {
     <Box as="main" p="8" fontSize="lg" maxWidth="3xl" mx="auto" w="full">
       <HStack justifyContent="space-between" alignItems="center" mb="4">
         <styled.img src={logoUrl} alt="wholabass" h="12" w="auto" />
-        <ThemeToggle />
+        <HStack gap="2">
+          <Button size="xs" variant="subtle" onClick={() => void navigate({ to: "/about" })}>
+            About
+          </Button>
+          <ThemeToggle />
+        </HStack>
       </HStack>
       <SidecarLine status={sidecar} />
 

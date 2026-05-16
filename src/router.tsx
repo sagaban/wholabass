@@ -5,6 +5,7 @@ import {
   createRouter,
   Outlet,
 } from "@tanstack/react-router";
+import { AboutScreen } from "@/components/AboutScreen";
 import { LibraryScreen } from "@/components/LibraryScreen";
 import { PlayerScreen } from "@/components/PlayerScreen";
 
@@ -31,7 +32,13 @@ const playerRoute = createRoute({
   }),
 });
 
-const routeTree = rootRoute.addChildren([libraryRoute, playerRoute]);
+const aboutRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/about",
+  component: AboutScreen,
+});
+
+const routeTree = rootRoute.addChildren([libraryRoute, playerRoute, aboutRoute]);
 
 export const router = createRouter({
   routeTree,
