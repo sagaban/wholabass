@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { SoundTouchNode } from "@soundtouchjs/audio-worklet";
@@ -1197,11 +1197,7 @@ function BeatsCalibrationCard({
       </styled.button>
       {!collapsed && (
         <>
-          <OffsetControls
-            offsetSec={offsetSec}
-            onSetOffset={onSetOffset}
-            label="Beats offset"
-          />
+          <OffsetControls offsetSec={offsetSec} onSetOffset={onSetOffset} label="Beats offset" />
           <SpeedControls speed={speed} onSetSpeed={onSetSpeed} label="Beats speed" />
           <OffsetControls
             offsetSec={playheadOffsetSec}
@@ -1356,9 +1352,7 @@ function TabSourceCard({
   };
 
   const busy =
-    status.kind === "uploading" ||
-    status.kind === "transcribing" ||
-    status.kind === "songsterr";
+    status.kind === "uploading" || status.kind === "transcribing" || status.kind === "songsterr";
 
   return (
     <Box
@@ -1992,11 +1986,83 @@ function LyricsPanel({ value, onChange, onClose, width, onResize }: LyricsPanelP
           whiteSpace="pre-wrap"
           opacity={value ? "1" : "0.5"}
         >
-          {value || "(no lyrics — click Edit to paste)"}
+          {value ? renderLyricsWithChords(value) : "(no lyrics — click Edit to paste)"}
         </styled.pre>
       )}
     </Box>
   );
+}
+
+/**
+ * Strict chord matcher: requires at least one *suffix* character
+ * directly after the root (accidental, quality, digit, slash-bass, or
+ * an opening parenthesis). Used for *inline* chord mentions inside
+ * normal lyric lines, where false-positiving bare `A` / `La` / `Do`
+ * as ordinary words would be obnoxious.
+ *
+ *   Am, Am7, Cmaj7, F#m, Bb, G/B           ← match
+ *   Lam7, Solm, Re7, Mim, Si7sus4          ← match
+ *   Do(maj7), C(add9), G(7sus4), Lam7(b5)  ← match
+ *   A, La, Do, Sol (alone)                 ← skip
+ *   "I am", "to do", lowercase tokens      ← skip (case-sensitive)
+ */
+const CHORD_RE_STRICT =
+  /\b(?:Do|Re|Mi|Fa|Sol|La|Si|[A-G])(?:[#b♯♭(]|m(?!aj)|maj|min|dim|aug|sus|°|\+|add|\d|\/(?:Do|Re|Mi|Fa|Sol|La|Si|[A-G])[#b♯♭]?)[A-Za-z0-9#b♯♭/+°()-]*/g;
+
+/**
+ * Loose chord matcher: accepts bare roots too (plain `Do`, `Re`,
+ * `Sol`, `A`, `C` …). Used only inside *chord-only* lines — lines
+ * where every whitespace-separated token already looks like a chord
+ * — so the bare-root acceptance doesn't bleed into prose.
+ */
+const CHORD_RE_LOOSE =
+  /\b(?:(?:Do|Re|Mi|Fa|Sol|La|Si|[A-G])(?:[#b♯♭(]|m(?!aj)|maj|min|dim|aug|sus|°|\+|add|\d|\/(?:Do|Re|Mi|Fa|Sol|La|Si|[A-G])[#b♯♭]?)[A-Za-z0-9#b♯♭/+°()-]*|Do|Re|Mi|Fa|Sol|La|Si|[A-G])\b/g;
+
+const CHORD_TOKEN_FULL_RE =
+  /^(?:(?:Do|Re|Mi|Fa|Sol|La|Si|[A-G])(?:[#b♯♭(]|m(?!aj)|maj|min|dim|aug|sus|°|\+|add|\d|\/(?:Do|Re|Mi|Fa|Sol|La|Si|[A-G])[#b♯♭]?)[A-Za-z0-9#b♯♭/+°()-]*|Do|Re|Mi|Fa|Sol|La|Si|[A-G])$/;
+
+/**
+ * True when every whitespace-separated token on the line, after
+ * trimming, looks like a chord. Used to flip into "chord-line" mode
+ * where bare solfège / single-letter roots are coloured too. Empty
+ * lines (or lines that are only whitespace) don't count.
+ */
+function isChordLine(line: string): boolean {
+  const tokens = line.trim().split(/\s+/).filter(Boolean);
+  if (tokens.length === 0) return false;
+  return tokens.every((t) => CHORD_TOKEN_FULL_RE.test(t));
+}
+
+/**
+ * Tokenise lyrics text into a React node list with chord tokens
+ * wrapped in a tomato-coloured span. Works line-by-line so we can
+ * pick the right regex per line, and returns plain strings for the
+ * non-chord parts so `<pre>`'s whitespace handling stays intact —
+ * chord-over-lyric alignment depends on every space and newline
+ * being preserved verbatim.
+ */
+function renderLyricsWithChords(text: string): ReactNode[] {
+  const parts: ReactNode[] = [];
+  const lines = text.split("\n");
+  let keyCounter = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const re = isChordLine(line) ? CHORD_RE_LOOSE : CHORD_RE_STRICT;
+    let lastIdx = 0;
+    for (const match of line.matchAll(re)) {
+      const start = match.index ?? 0;
+      if (start > lastIdx) parts.push(line.slice(lastIdx, start));
+      parts.push(
+        <styled.span key={keyCounter++} color="tomato.11" fontWeight="semibold">
+          {match[0]}
+        </styled.span>,
+      );
+      lastIdx = start + match[0].length;
+    }
+    if (lastIdx < line.length) parts.push(line.slice(lastIdx));
+    if (i < lines.length - 1) parts.push("\n");
+  }
+  return parts;
 }
 
 interface SectionsListProps {
