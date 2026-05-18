@@ -27,8 +27,13 @@ const TRACKS: readonly Track[] = [...STEM_NAMES, "midi"] as const;
 const STRIP_GRID_COLS = "70px 1fr 36px 70px";
 
 function effectiveTrackGain(strip: MixerStripState, anySoloed: boolean): number {
+  // Solo wins over mute on the same strip — a user who has both lit
+  // up on a track meant "keep me audible while everything else mutes"
+  // (the standard DAW convention). Mute only silences a strip that
+  // isn't itself soloed.
+  if (strip.soloed) return Math.max(0, Math.min(1, strip.volume));
   if (strip.muted) return 0;
-  if (anySoloed && !strip.soloed) return 0;
+  if (anySoloed) return 0;
   return Math.max(0, Math.min(1, strip.volume));
 }
 
