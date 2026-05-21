@@ -35,13 +35,7 @@ export function ensureBravuraLoaded(): void {
  * https://www.smufl.org/version/latest/range/rests/.
  */
 export const SMUFL_REST: Record<
-  | "whole"
-  | "half"
-  | "quarter"
-  | "eighth"
-  | "sixteenth"
-  | "thirtySecond"
-  | "sixtyFourth",
+  "whole" | "half" | "quarter" | "eighth" | "sixteenth" | "thirtySecond" | "sixtyFourth",
   string
 > = {
   whole: "\u{E4E3}", // restWhole — hangs below the line

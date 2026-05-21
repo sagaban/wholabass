@@ -94,7 +94,10 @@ export async function importSongsterrBass(url: string): Promise<SongsterrImport>
 
 function buildScoreFor(
   meta: SongsterrStateMetaCurrent,
-  revisions: { trackMeta: SongsterrStateMetaCurrentTrack; revision: SongsterrRevisionTrackPayload }[],
+  revisions: {
+    trackMeta: SongsterrStateMetaCurrentTrack;
+    revision: SongsterrRevisionTrackPayload;
+  }[],
 ): { score: alphaTab.model.Score } {
   // Reach back into the same private builder via a fresh converter — the
   // public toGp7/toMidi callers don't expose Score, but constructing one
@@ -104,8 +107,9 @@ function buildScoreFor(
   // optimization: expose a `buildScore()` on the converter so we don't
   // build it twice. For a one-shot import the cost is negligible.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const score = (conv as unknown as { buildScore: (i: unknown) => { score: alphaTab.model.Score } })
-    .buildScore({ meta, revisions }).score;
+  const score = (
+    conv as unknown as { buildScore: (i: unknown) => { score: alphaTab.model.Score } }
+  ).buildScore({ meta, revisions }).score;
   return { score };
 }
 
@@ -186,7 +190,10 @@ function scoreToBassTab(score: alphaTab.model.Score, midiBytes: Uint8Array): Bas
   return out;
 }
 
-function buildArticulation(beat: alphaTab.model.Beat, note: alphaTab.model.Note): Articulation | undefined {
+function buildArticulation(
+  beat: alphaTab.model.Beat,
+  note: alphaTab.model.Note,
+): Articulation | undefined {
   const art: Articulation = {};
   if (note.isStaccato) art.staccato = true;
   if (note.isPalmMute || beat.isPalmMute) art.palmMute = true;
@@ -194,7 +201,10 @@ function buildArticulation(beat: alphaTab.model.Beat, note: alphaTab.model.Note)
   if (note.harmonicType !== alphaTab.model.HarmonicType.None) art.harmonic = true;
   if (note.isHammerPullOrigin) art.legato = true;
   if (note.slideOutType !== alphaTab.model.SlideOutType.None) art.slide = true;
-  if (note.vibrato !== alphaTab.model.VibratoType.None || beat.vibrato !== alphaTab.model.VibratoType.None) {
+  if (
+    note.vibrato !== alphaTab.model.VibratoType.None ||
+    beat.vibrato !== alphaTab.model.VibratoType.None
+  ) {
     art.vibrato = true;
   }
   if (note.hasBend) {

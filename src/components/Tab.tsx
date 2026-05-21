@@ -1919,9 +1919,7 @@ function TabSystemRow({
           const yMid =
             layout.topPadding + ((layout.stringCount - 1) * layout.stringLineSpacing) / 2;
           const overlapsExplicit = (rStart: number, rDur: number) =>
-            explicitRests.some(
-              (e) => rStart < e.startSec + e.durSec && rStart + rDur > e.startSec,
-            );
+            explicitRests.some((e) => rStart < e.startSec + e.durSec && rStart + rDur > e.startSec);
           return (
             <>
               {rests
@@ -1962,10 +1960,7 @@ function TabSystemRow({
                 const x = rowTimeToX(system, clipStart);
                 const xEnd = rowTimeToX(system, clipEnd);
                 const cx = (x + xEnd) / 2;
-                const kind = classifyDuration(
-                  r.durSec,
-                  localBeatDuration(r.startSec, beats.beats),
-                );
+                const kind = classifyDuration(r.durSec, localBeatDuration(r.startSec, beats.beats));
                 const isSelected = selectedRestId === r.id;
                 return (
                   <g
@@ -2049,17 +2044,14 @@ function TabSystemRow({
       )}
 
       {(() => {
-        const sel = selectedRestId
-          ? explicitRests.find((r) => r.id === selectedRestId)
-          : null;
+        const sel = selectedRestId ? explicitRests.find((r) => r.id === selectedRestId) : null;
         if (!sel) return null;
         if (sel.startSec >= system.endSec || sel.startSec + sel.durSec <= system.startSec) {
           return null;
         }
         const x = rowTimeToX(system, Math.max(sel.startSec, system.startSec));
         const xEnd = rowTimeToX(system, Math.min(sel.startSec + sel.durSec, system.endSec));
-        const yMid =
-          layout.topPadding + ((layout.stringCount - 1) * layout.stringLineSpacing) / 2;
+        const yMid = layout.topPadding + ((layout.stringCount - 1) * layout.stringLineSpacing) / 2;
         const beatSec = localBeatDuration(sel.startSec, beats.beats);
         return (
           <RestEditPopover
@@ -2408,15 +2400,7 @@ interface NoteEditPopoverProps {
  * `<text>` element per rest means the user can click / select / future-
  * delete each one as a real entity.
  */
-function RestGlyph({
-  kind,
-  cx,
-  y,
-}: {
-  kind: RhythmKind;
-  cx: number;
-  y: number;
-}) {
+function RestGlyph({ kind, cx, y }: { kind: RhythmKind; cx: number; y: number }) {
   let glyph = SMUFL_REST.quarter;
   if (kind === "whole") glyph = SMUFL_REST.whole;
   else if (kind === "half" || kind === "dottedHalf") glyph = SMUFL_REST.half;
@@ -2450,14 +2434,7 @@ function bestOctavePlacement(pitch: number) {
   return best;
 }
 
-function NoteEditPopover({
-  note,
-  beats,
-  anchorX,
-  anchorY,
-  onEdit,
-  onClose,
-}: NoteEditPopoverProps) {
+function NoteEditPopover({ note, beats, anchorX, anchorY, onEdit, onClose }: NoteEditPopoverProps) {
   const id = tabNoteId(note);
   const placements = useMemo(() => enumeratePlacements(note.pitch, DEFAULT_TUNING), [note.pitch]);
   const octaveUp = useMemo(() => bestOctavePlacement(note.pitch + 12), [note.pitch]);

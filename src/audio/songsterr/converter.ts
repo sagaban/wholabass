@@ -5,7 +5,7 @@
 //   (MIT, © 2026 Ryan Roberts). Only the import paths have been adapted
 //   to wholabass's layout; behaviour is unchanged.
 
-import * as alphaTab from '@coderline/alphatab';
+import * as alphaTab from "@coderline/alphatab";
 import type {
   ConversionWarning,
   SongsterrRevisionAutomationTempoPoint,
@@ -14,10 +14,10 @@ import type {
   SongsterrRevisionTrackPayload,
   SongsterrRevisionVoicePayload,
   SongsterrStateMetaCurrent,
-  SongsterrStateMetaCurrentTrack
-} from './types';
-import { mapSongsterrDuration } from './duration-mapper';
-import { mapSongsterrInstrumentToPlayback } from './instrument-map';
+  SongsterrStateMetaCurrentTrack,
+} from "./types";
+import { mapSongsterrDuration } from "./duration-mapper";
+import { mapSongsterrInstrumentToPlayback } from "./instrument-map";
 
 export interface SongsterrRevisionTrackInput {
   trackMeta: SongsterrStateMetaCurrentTrack;
@@ -50,7 +50,7 @@ const velocityToDynamicMap: Record<string, alphaTab.model.DynamicValue> = {
   mf: alphaTab.model.DynamicValue.MF,
   f: alphaTab.model.DynamicValue.F,
   ff: alphaTab.model.DynamicValue.FF,
-  fff: alphaTab.model.DynamicValue.FFF
+  fff: alphaTab.model.DynamicValue.FFF,
 };
 
 const harmonicTypeMap: Record<string, alphaTab.model.HarmonicType> = {
@@ -59,7 +59,7 @@ const harmonicTypeMap: Record<string, alphaTab.model.HarmonicType> = {
   pinch: alphaTab.model.HarmonicType.Pinch,
   tap: alphaTab.model.HarmonicType.Tap,
   semi: alphaTab.model.HarmonicType.Semi,
-  feedback: alphaTab.model.HarmonicType.Feedback
+  feedback: alphaTab.model.HarmonicType.Feedback,
 };
 
 /**
@@ -120,10 +120,7 @@ function buildPercussionIndexMap(): Map<number, number> {
   score.finish(settings);
   const exporter = new alphaTab.exporter.Gp7Exporter();
   const data = exporter.export(score, settings);
-  const reimported = alphaTab.importer.ScoreLoader.loadScoreFromBytes(
-    data,
-    settings
-  );
+  const reimported = alphaTab.importer.ScoreLoader.loadScoreFromBytes(data, settings);
 
   const map = new Map<number, number>();
   const articulations = reimported.tracks[0].percussionArticulations;
@@ -173,7 +170,7 @@ export class SongsterrToAlphaTabConverter {
     const score = new alphaTab.model.Score();
     score.title = meta.title;
     score.artist = meta.artist;
-    score.tab = 'Songsterr Downloader';
+    score.tab = "Songsterr Downloader";
 
     const masterTrack = this.pickMasterTrack(revisions);
     const masterBarCount = Math.max(1, this.getMasterBarCount(revisions));
@@ -182,13 +179,12 @@ export class SongsterrToAlphaTabConverter {
       score,
       masterTrack,
       masterBarCount,
-      warnings
+      warnings,
     });
 
     let nextChannel = 0;
     for (const entry of revisions) {
-      const instrumentId =
-        entry.trackMeta.instrumentId ?? entry.revision.instrumentId;
+      const instrumentId = entry.trackMeta.instrumentId ?? entry.revision.instrumentId;
       const isPercussion = instrumentId === 1024 || !!entry.trackMeta.isDrums;
       let channel: number;
       if (isPercussion) {
@@ -203,7 +199,7 @@ export class SongsterrToAlphaTabConverter {
         entry,
         masterBarCount,
         warnings,
-        channel
+        channel,
       });
     }
 
@@ -217,7 +213,7 @@ export class SongsterrToAlphaTabConverter {
     score,
     masterTrack,
     masterBarCount,
-    warnings
+    warnings,
   }: {
     score: alphaTab.model.Score;
     masterTrack: SongsterrRevisionTrackPayload | null;
@@ -250,14 +246,11 @@ export class SongsterrToAlphaTabConverter {
         masterBar.isRepeatStart = true;
       }
 
-      if (typeof measure?.repeatCount === 'number' && measure.repeatCount > 0) {
+      if (typeof measure?.repeatCount === "number" && measure.repeatCount > 0) {
         masterBar.repeatCount = measure.repeatCount;
       }
 
-      if (
-        typeof measure?.alternateEnding === 'number' &&
-        measure.alternateEnding > 0
-      ) {
+      if (typeof measure?.alternateEnding === "number" && measure.alternateEnding > 0) {
         masterBar.alternateEndings = measure.alternateEnding;
       }
 
@@ -273,7 +266,7 @@ export class SongsterrToAlphaTabConverter {
     entry,
     masterBarCount,
     warnings,
-    channel
+    channel,
   }: {
     score: alphaTab.model.Score;
     entry: SongsterrRevisionTrackInput;
@@ -283,11 +276,11 @@ export class SongsterrToAlphaTabConverter {
   }): void {
     const { trackMeta, revision } = entry;
     const playbackMapping = mapSongsterrInstrumentToPlayback(
-      trackMeta.instrumentId ?? revision.instrumentId
+      trackMeta.instrumentId ?? revision.instrumentId,
     );
 
     const track = new alphaTab.model.Track();
-    track.name = trackMeta.title || trackMeta.name || revision.name || 'Track';
+    track.name = trackMeta.title || trackMeta.name || revision.name || "Track";
     track.shortName = track.name.slice(0, 20);
     track.playbackInfo.program = playbackMapping.program;
     track.playbackInfo.primaryChannel = channel;
@@ -296,7 +289,7 @@ export class SongsterrToAlphaTabConverter {
     const staff = new alphaTab.model.Staff();
     const tuning = revision.tuning || trackMeta.tuning;
     if (Array.isArray(tuning) && tuning.length > 0) {
-      staff.stringTuning = new alphaTab.model.Tuning('Custom', tuning, false);
+      staff.stringTuning = new alphaTab.model.Tuning("Custom", tuning, false);
     }
     const isPercussion = playbackMapping.isPercussion || !!trackMeta.isDrums;
     staff.isPercussion = isPercussion;
@@ -334,7 +327,7 @@ export class SongsterrToAlphaTabConverter {
             warnings,
             locationPrefix: `track:${trackMeta.partId}|measure:${measureIndex}|voice:${voiceIndex}`,
             isPercussion,
-            numStrings
+            numStrings,
           });
 
           bar.addVoice(voice);
@@ -362,7 +355,7 @@ export class SongsterrToAlphaTabConverter {
     warnings,
     locationPrefix,
     isPercussion,
-    numStrings
+    numStrings,
   }: {
     voice: alphaTab.model.Voice;
     sourceVoice: SongsterrRevisionVoicePayload | undefined;
@@ -386,7 +379,7 @@ export class SongsterrToAlphaTabConverter {
         warnings,
         `${locationPrefix}|beat:${beatIndex}`,
         isPercussion,
-        numStrings
+        numStrings,
       );
       voice.addBeat(beat);
     }
@@ -401,7 +394,7 @@ export class SongsterrToAlphaTabConverter {
     warnings: ConversionWarning[],
     location: string,
     isPercussion: boolean,
-    numStrings: number
+    numStrings: number,
   ): alphaTab.model.Beat {
     const beat = new alphaTab.model.Beat();
 
@@ -415,28 +408,26 @@ export class SongsterrToAlphaTabConverter {
     beat.duration = mappedDuration.duration;
     beat.dots = beatData.dots ?? mappedDuration.dots;
     const rawText = beatData.text;
-    const textStr = typeof rawText === 'string' ? rawText : rawText?.text;
+    const textStr = typeof rawText === "string" ? rawText : rawText?.text;
     beat.text = (textStr as string | undefined) || null;
 
     if (mappedDuration.isApproximate && !beatData.tuplet) {
       this.pushWarning(warnings, {
-        code: 'duration_approximated',
-        message: `Approximated unsupported duration ${JSON.stringify(
-          beatData.duration
-        )}`,
-        location
+        code: "duration_approximated",
+        message: `Approximated unsupported duration ${JSON.stringify(beatData.duration)}`,
+        location,
       });
     }
 
     // Tuplet support
-    if (typeof beatData.tuplet === 'number' && beatData.tuplet > 1) {
+    if (typeof beatData.tuplet === "number" && beatData.tuplet > 1) {
       const [num, den] = getTupletRatio(beatData.tuplet);
       beat.tupletNumerator = num;
       beat.tupletDenominator = den;
 
       // For tuplets, use the base duration from `type` field rather than the
       // fractional `duration` field, since tuplets modify the base duration.
-      if (typeof beatData.type === 'number' && beatData.type > 0) {
+      if (typeof beatData.type === "number" && beatData.type > 0) {
         const baseDuration = mapSongsterrDuration([1, beatData.type]);
         beat.duration = baseDuration.duration;
         beat.dots = beatData.dots ?? 0;
@@ -444,26 +435,25 @@ export class SongsterrToAlphaTabConverter {
     }
 
     // Dynamics / velocity
-    if (typeof beatData.velocity === 'string') {
-      const mappedDynamic =
-        velocityToDynamicMap[beatData.velocity.toLowerCase()];
-      if (typeof mappedDynamic === 'number') {
+    if (typeof beatData.velocity === "string") {
+      const mappedDynamic = velocityToDynamicMap[beatData.velocity.toLowerCase()];
+      if (typeof mappedDynamic === "number") {
         beat.dynamics = mappedDynamic;
       } else {
         this.pushWarning(warnings, {
-          code: 'velocity_unknown',
+          code: "velocity_unknown",
           message: `Unsupported beat velocity "${beatData.velocity}"`,
-          location
+          location,
         });
       }
     }
 
     // Pick stroke
-    if (typeof beatData.pickStroke === 'string') {
+    if (typeof beatData.pickStroke === "string") {
       const ps = beatData.pickStroke.toLowerCase();
-      if (ps === 'down') {
+      if (ps === "down") {
         beat.pickStroke = alphaTab.model.PickStroke.Down;
-      } else if (ps === 'up') {
+      } else if (ps === "up") {
         beat.pickStroke = alphaTab.model.PickStroke.Up;
       }
     }
@@ -488,7 +478,7 @@ export class SongsterrToAlphaTabConverter {
         warnings,
         `${location}|note:${noteIndex}`,
         isPercussion,
-        numStrings
+        numStrings,
       );
       beat.addNote(note);
     }
@@ -502,7 +492,7 @@ export class SongsterrToAlphaTabConverter {
     warnings: ConversionWarning[],
     location: string,
     isPercussion: boolean,
-    numStrings: number
+    numStrings: number,
   ): alphaTab.model.Note {
     const note = new alphaTab.model.Note();
 
@@ -511,9 +501,7 @@ export class SongsterrToAlphaTabConverter {
     note.fret = noteData.fret ?? 0;
 
     if (isPercussion) {
-      note.percussionArticulation = getPercussionArticulationIndex(
-        noteData.fret ?? 0
-      );
+      note.percussionArticulation = getPercussionArticulationIndex(noteData.fret ?? 0);
     }
 
     // Tie
@@ -559,12 +547,12 @@ export class SongsterrToAlphaTabConverter {
     }
 
     // Slide
-    if (typeof noteData.slide === 'string') {
+    if (typeof noteData.slide === "string") {
       this.mapSlide(note, noteData.slide, warnings, location);
     }
 
     // Harmonics
-    if (typeof noteData.harmonic === 'string') {
+    if (typeof noteData.harmonic === "string") {
       this.mapHarmonic(note, noteData, warnings, location);
     }
 
@@ -580,38 +568,38 @@ export class SongsterrToAlphaTabConverter {
     note: alphaTab.model.Note,
     slide: string,
     warnings: ConversionWarning[],
-    location: string
+    location: string,
   ): void {
     const normalizedSlide = slide.toLowerCase();
-    if (normalizedSlide === 'shift') {
+    if (normalizedSlide === "shift") {
       note.slideOutType = alphaTab.model.SlideOutType.Shift;
       return;
     }
-    if (normalizedSlide === 'legato') {
+    if (normalizedSlide === "legato") {
       note.slideOutType = alphaTab.model.SlideOutType.Legato;
       return;
     }
-    if (normalizedSlide === 'into_from_below' || normalizedSlide === 'below') {
+    if (normalizedSlide === "into_from_below" || normalizedSlide === "below") {
       note.slideInType = alphaTab.model.SlideInType.IntoFromBelow;
       return;
     }
-    if (normalizedSlide === 'into_from_above') {
+    if (normalizedSlide === "into_from_above") {
       note.slideInType = alphaTab.model.SlideInType.IntoFromAbove;
       return;
     }
-    if (normalizedSlide === 'out_up') {
+    if (normalizedSlide === "out_up") {
       note.slideOutType = alphaTab.model.SlideOutType.OutUp;
       return;
     }
-    if (normalizedSlide === 'out_down' || normalizedSlide === 'downwards') {
+    if (normalizedSlide === "out_down" || normalizedSlide === "downwards") {
       note.slideOutType = alphaTab.model.SlideOutType.OutDown;
       return;
     }
 
     this.pushWarning(warnings, {
-      code: 'slide_unsupported',
+      code: "slide_unsupported",
       message: `Unsupported slide effect "${slide}"`,
-      location
+      location,
     });
   }
 
@@ -619,28 +607,28 @@ export class SongsterrToAlphaTabConverter {
     note: alphaTab.model.Note,
     noteData: SongsterrRevisionNotePayload,
     warnings: ConversionWarning[],
-    location: string
+    location: string,
   ): void {
     const harmonicStr = noteData.harmonic!.toLowerCase();
     const mappedType = harmonicTypeMap[harmonicStr];
 
-    if (typeof mappedType === 'number') {
+    if (typeof mappedType === "number") {
       note.harmonicType = mappedType;
-      if (typeof noteData.harmonicFret === 'number') {
+      if (typeof noteData.harmonicFret === "number") {
         note.harmonicValue = noteData.harmonicFret;
       }
     } else {
       this.pushWarning(warnings, {
-        code: 'harmonic_unsupported',
+        code: "harmonic_unsupported",
         message: `Unsupported harmonic type "${noteData.harmonic}"`,
-        location
+        location,
       });
     }
   }
 
   private mapBend(
     note: alphaTab.model.Note,
-    bend: { tone: number; points: { position: number; tone: number }[] }
+    bend: { tone: number; points: { position: number; tone: number }[] },
   ): void {
     note.bendType = alphaTab.model.BendType.Custom;
 
@@ -657,7 +645,7 @@ export class SongsterrToAlphaTabConverter {
 
   private fillWithRestBeats(
     voice: alphaTab.model.Voice,
-    masterBar: alphaTab.model.MasterBar
+    masterBar: alphaTab.model.MasterBar,
   ): void {
     const denominator = masterBar.timeSignatureDenominator || 4;
     const numerator = masterBar.timeSignatureNumerator || 4;
@@ -679,7 +667,7 @@ export class SongsterrToAlphaTabConverter {
   }
 
   private pickMasterTrack(
-    revisions: SongsterrRevisionTrackInput[]
+    revisions: SongsterrRevisionTrackInput[],
   ): SongsterrRevisionTrackPayload | null {
     if (revisions.length === 0) {
       return null;
@@ -692,9 +680,7 @@ export class SongsterrToAlphaTabConverter {
     }).revision;
   }
 
-  private getValidSignature(
-    signature: [number, number] | undefined
-  ): [number, number] | null {
+  private getValidSignature(signature: [number, number] | undefined): [number, number] | null {
     if (!Array.isArray(signature) || signature.length !== 2) {
       return null;
     }
@@ -706,17 +692,17 @@ export class SongsterrToAlphaTabConverter {
   }
 
   private extractMarkerText(marker: string | { text: string; width?: number }): string {
-    if (typeof marker === 'string') {
+    if (typeof marker === "string") {
       return marker;
     }
-    if (marker && typeof marker === 'object' && typeof marker.text === 'string') {
+    if (marker && typeof marker === "object" && typeof marker.text === "string") {
       return marker.text;
     }
-    return '';
+    return "";
   }
 
   private findTempoPoints(
-    masterTrack: SongsterrRevisionTrackPayload | null
+    masterTrack: SongsterrRevisionTrackPayload | null,
   ): SongsterrRevisionAutomationTempoPoint[] {
     const tempo = masterTrack?.automations?.tempo;
     return Array.isArray(tempo) ? tempo : [];
@@ -725,16 +711,16 @@ export class SongsterrToAlphaTabConverter {
   private applyTempoAutomations(
     score: alphaTab.model.Score,
     points: SongsterrRevisionAutomationTempoPoint[],
-    warnings: ConversionWarning[]
+    warnings: ConversionWarning[],
   ): void {
     for (const point of points) {
       const barIndex = point.measure;
       const masterBar = score.masterBars[barIndex];
       if (!masterBar) {
         this.pushWarning(warnings, {
-          code: 'tempo_measure_out_of_range',
+          code: "tempo_measure_out_of_range",
           message: `Tempo automation references missing measure ${barIndex}`,
-          location: `measure:${barIndex}`
+          location: `measure:${barIndex}`,
         });
         continue;
       }
@@ -743,24 +729,19 @@ export class SongsterrToAlphaTabConverter {
       // Songsterr BPM is always in quarter-note beats, so use reference=2 (×1.0)
       const tempoReference = 2;
       const ratioPosition =
-        point.position > 0
-          ? Math.max(0, Math.min(1, point.position / (point.type || 4)))
-          : 0;
+        point.position > 0 ? Math.max(0, Math.min(1, point.position / (point.type || 4))) : 0;
       const tempoAutomation = alphaTab.model.Automation.buildTempoAutomation(
         false,
         ratioPosition,
         point.bpm,
         tempoReference,
-        true
+        true,
       );
       masterBar.tempoAutomations.push(tempoAutomation);
     }
   }
 
-  private pushWarning(
-    warnings: ConversionWarning[],
-    warning: ConversionWarning
-  ): void {
+  private pushWarning(warnings: ConversionWarning[], warning: ConversionWarning): void {
     if (warnings.length < MAX_WARNINGS) {
       warnings.push(warning);
     }

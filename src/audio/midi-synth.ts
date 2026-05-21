@@ -88,8 +88,7 @@ export function notesToSchedule(
     let gainMul = 1;
     if (a?.ghost) gainMul *= 0.3;
     if (a?.accent) gainMul *= 1.4;
-    const peakGain =
-      PEAK_GAIN_SCALE * Math.max(VELOCITY_FLOOR, Math.min(1, n.velocity)) * gainMul;
+    const peakGain = PEAK_GAIN_SCALE * Math.max(VELOCITY_FLOOR, Math.min(1, n.velocity)) * gainMul;
     let scaledEnd = evtEnd;
     if (a?.staccato) {
       scaledEnd = evtStart + (evtEnd - evtStart) * 0.3;
