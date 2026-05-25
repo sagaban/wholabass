@@ -3,11 +3,15 @@
 Public entry point: `download_song(song_id, url, out_dir)`.
 
 The actual yt-dlp call is isolated behind `_run_yt_dlp` so tests can
-substitute a stub. Requires `ffmpeg` on PATH for audio extraction.
+substitute a stub. yt-dlp needs an `ffmpeg` binary for audio
+extraction — by default it looks on `PATH`, and a packaged build
+should set the `FFMPEG_LOCATION` env var to the bundled binary's
+path so the user doesn't need a system install.
 """
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +32,13 @@ YT_DLP_OPTS_BASE: dict[str, Any] = {
         }
     ],
 }
+
+
+def _ffmpeg_location() -> str | None:
+    """Return the bundled ffmpeg path if the Rust sidecar launcher
+    pointed us at one, else None (yt-dlp falls back to PATH)."""
+    loc = os.environ.get("FFMPEG_LOCATION")
+    return loc if loc else None
 
 
 def _yt_dlp_progress_hook(d: dict[str, Any]) -> None:
@@ -66,6 +77,9 @@ def download_song(song_id: str, url: str, out_dir: Path) -> dict[str, Any]:
         "outtmpl": str(out_dir / "source.%(ext)s"),
         "progress_hooks": [_yt_dlp_progress_hook],
     }
+    ff = _ffmpeg_location()
+    if ff:
+        options["ffmpeg_location"] = ff
     info = _run_yt_dlp(url, options)
     progress.emit(100.0, "downloading")
     target = out_dir / "source.wav"

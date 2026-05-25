@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "prepare": "panda codegen",
+    "prepare": "panda codegen && bash scripts/ensure-sidecar-stubs.sh",
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",

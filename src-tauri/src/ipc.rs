@@ -24,10 +24,56 @@ struct Inner {
 }
 
 impl Sidecar {
-    pub async fn spawn() -> Result<Self> {
+    /// Spawn the sidecar, preferring the bundled binary in a packaged
+    /// build and falling back to `uv run python server.py` when running
+    /// from a dev checkout.
+    ///
+    /// In a Tauri bundle the PyInstaller-compiled `wholabass-server`
+    /// binary lives in the app's resource dir alongside a static
+    /// `ffmpeg` (both shipped via `bundle.externalBin`). We export
+    /// `FFMPEG_LOCATION` so `yt-dlp` finds the sibling binary without
+    /// needing a system install. The dev fallback exists so
+    /// `pnpm tauri dev` keeps working without first running the
+    /// 1-2 minute PyInstaller build.
+    pub async fn spawn(app: &tauri::AppHandle) -> Result<Self> {
+        if let Some(packaged) = locate_bundled_sidecar(app) {
+            return Self::spawn_bundled(&packaged.binary, packaged.ffmpeg.as_deref()).await;
+        }
         let project_root = locate_project_root()
             .context("could not locate project root containing ml/server.py")?;
         Self::spawn_in_dir(&project_root.join("ml")).await
+    }
+
+    /// Direct-spawn the bundled binary (no `uv` involvement). Used in
+    /// production where there's no Python install on the user's
+    /// machine — the PyInstaller binary is self-contained.
+    async fn spawn_bundled(binary: &std::path::Path, ffmpeg: Option<&std::path::Path>) -> Result<Self> {
+        let mut cmd = Command::new(binary);
+        cmd.stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit())
+            .kill_on_drop(true);
+        if let Some(ff) = ffmpeg {
+            cmd.env("FFMPEG_LOCATION", ff);
+        }
+        let mut child = cmd
+            .spawn()
+            .with_context(|| format!("failed to spawn bundled sidecar at {}", binary.display()))?;
+
+        let stdin = child.stdin.take().ok_or_else(|| anyhow!("no child stdin"))?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| anyhow!("no child stdout"))?;
+
+        Ok(Self {
+            inner: Mutex::new(Inner {
+                child,
+                stdin,
+                stdout: BufReader::new(stdout),
+            }),
+            next_id: AtomicU64::new(1),
+        })
     }
 
     pub async fn spawn_in_dir(ml_dir: &std::path::Path) -> Result<Self> {
@@ -150,6 +196,34 @@ impl Drop for Sidecar {
             let _ = inner.child.start_kill();
         }
     }
+}
+
+struct BundledSidecar {
+    binary: std::path::PathBuf,
+    ffmpeg: Option<std::path::PathBuf>,
+}
+
+/// Look for the PyInstaller-compiled sidecar that ships next to the
+/// main binary in the Tauri bundle. On macOS, `bundle.externalBin`
+/// entries land in `Wholabass.app/Contents/MacOS/` alongside the main
+/// executable — *not* in `Contents/Resources/`, which is what
+/// `app.path().resource_dir()` returns. Resolving via the current
+/// executable's parent dir works for all three desktop platforms
+/// (Tauri puts the sibling files there on Linux + Windows too).
+///
+/// Returns `None` in a dev checkout where the binary isn't actually
+/// next to the dev executable — the caller falls back to `uv run`.
+fn locate_bundled_sidecar(_app: &tauri::AppHandle) -> Option<BundledSidecar> {
+    let exe = std::env::current_exe().ok()?;
+    let dir = exe.parent()?;
+    let suffix = if cfg!(windows) { ".exe" } else { "" };
+    let binary = dir.join(format!("wholabass-server{suffix}"));
+    if !binary.is_file() {
+        return None;
+    }
+    let ffmpeg_path = dir.join(format!("ffmpeg{suffix}"));
+    let ffmpeg = ffmpeg_path.is_file().then_some(ffmpeg_path);
+    Some(BundledSidecar { binary, ffmpeg })
 }
 
 /// Walk up from CARGO_MANIFEST_DIR or the current exe to find the project root

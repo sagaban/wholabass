@@ -424,7 +424,7 @@ async fn cancel_ingest(
     drop(old);
 
     // Spawn a fresh sidecar so the next ingest works.
-    match Sidecar::spawn().await {
+    match Sidecar::spawn(&app).await {
         Ok(sc) => {
             *state.sidecar.lock().await = Some(Arc::new(sc));
         }
@@ -739,7 +739,7 @@ pub fn run() {
         .setup(|app| {
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
-                match Sidecar::spawn().await {
+                match Sidecar::spawn(&handle).await {
                     Ok(sc) => {
                         let state = handle.state::<AppState>();
                         *state.sidecar.lock().await = Some(Arc::new(sc));
