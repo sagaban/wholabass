@@ -145,6 +145,7 @@ class FakeAudioContext {
 
 interface FakeStretcher {
   tempo: FakeAudioParam;
+  pitchSemitones: FakeAudioParam;
   connect: ReturnType<typeof vi.fn>;
   disconnect: ReturnType<typeof vi.fn>;
 }
@@ -157,6 +158,7 @@ function makeStretcherFactory(): {
   const factory: StretcherFactory = () => {
     const s: FakeStretcher = {
       tempo: makeAudioParam(1),
+      pitchSemitones: makeAudioParam(0),
       connect: vi.fn(),
       disconnect: vi.fn(),
     };

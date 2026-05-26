@@ -215,6 +215,17 @@ export interface EditsFile {
    * this song — Player uses its own defaults in that case.
    */
   mixer?: MixerState;
+  /**
+   * Global transpose in semitones applied to:
+   *   - the audio stems (via SoundTouch's pitchSemitones AudioParam,
+   *     preserving tempo),
+   *   - the MIDI synth feed (each bass note's pitch + N), and
+   *   - the chord names rendered in the lyrics panel (display-only —
+   *     the stored `lyrics` string is left untouched so flipping pitch
+   *     back to 0 restores the original spellings exactly).
+   * Range clamped to [-12, +12] on load. Default 0.
+   */
+  pitchShiftSemitones?: number;
 }
 
 /**

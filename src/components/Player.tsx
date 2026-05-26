@@ -53,6 +53,7 @@ import {
   type RestEntry,
   type SectionLabel,
 } from "@/tab/edits";
+import { preferFlatsForLyrics, transposeChord } from "@/lyrics/chords";
 
 type LoadStatus = { kind: "loading" } | { kind: "ready" } | { kind: "error"; message: string };
 
@@ -119,6 +120,10 @@ function normalizeEditsFile(raw: unknown): EditsFile {
         ? r.playheadOffsetSec
         : 0,
     lyrics: typeof r.lyrics === "string" ? r.lyrics : "",
+    pitchShiftSemitones:
+      typeof r.pitchShiftSemitones === "number" && Number.isFinite(r.pitchShiftSemitones)
+        ? Math.max(-12, Math.min(12, Math.round(r.pitchShiftSemitones)))
+        : 0,
     ...(mixer ? { mixer } : {}),
   };
 }
@@ -396,6 +401,23 @@ export function Player({ songId }: PlayerProps) {
   }, []);
 
   /**
+   * Persist the global pitch transpose. Like the mixer setter, bypasses
+   * the undo stack — Cmd+Z undoing each tick of a pitch slider drag
+   * isn't the right UX. Engine push happens in a separate effect keyed
+   * on `edits.pitchShiftSemitones` so seek / song-load / engine-reload
+   * all converge on the persisted value.
+   */
+  const onPitchChange = useCallback((semitones: number) => {
+    const clamped = Math.max(-12, Math.min(12, Math.round(semitones)));
+    const prev = editsRef.current;
+    if ((prev.pitchShiftSemitones ?? 0) === clamped) return;
+    const updated: EditsFile = { ...prev, pitchShiftSemitones: clamped };
+    editsRef.current = updated;
+    editsDirtyRef.current = true;
+    setEditsState(updated);
+  }, []);
+
+  /**
    * Ripple-delete: drop a `[startSec, endSec)` audio-time span from
    * the MIDI. Notes inside vanish; later notes' startSec shift back by
    * the span's duration so the next surviving note slides into the
@@ -661,14 +683,30 @@ export function Player({ songId }: PlayerProps) {
     };
   }, [songId, tabSourceRev, midiOffsetSec, midiSpeed]);
 
+  const pitchShiftSemitones = edits.pitchShiftSemitones ?? 0;
+
   // Re-apply cuts + note edits whenever any of those inputs change.
   // Cuts run first (filter inside, shift later notes back) so edit ids
   // reference the same shifted time domain that the renderer + synth
-  // use. Synchronous — no async gap — so a ripple-delete mid-playback
+  // use. Then the global pitch transpose is applied — same offset that
+  // the stems' SoundTouchNode is using, so the synth and the audio
+  // mix end up in the same key.
+  // Synchronous — no async gap — so a ripple-delete mid-playback
   // cancels and re-schedules in the same frame.
   useEffect(() => {
     const shifted = applyCutsToNotes(mappedBass, cuts);
-    const notes = applyNoteEditsToBass(shifted, editNotes);
+    const filtered = applyNoteEditsToBass(shifted, editNotes);
+    const notes =
+      pitchShiftSemitones === 0
+        ? filtered
+        : filtered.map(
+            (n): BassNote => ({
+              pitch: n.pitch + pitchShiftSemitones,
+              startSec: n.startSec,
+              durSec: n.durSec,
+              velocity: n.velocity,
+            }),
+          );
     bassNotesRef.current = notes;
     const synth = synthRef.current;
     if (!synth) return;
@@ -678,7 +716,15 @@ export function Player({ songId }: PlayerProps) {
     if (engine?.isPlaying) {
       synth.schedule(engine.getCurrentTime(), engine.getTempo());
     }
-  }, [mappedBass, editNotes, cuts]);
+  }, [mappedBass, editNotes, cuts, pitchShiftSemitones]);
+
+  // Push the global pitch transpose to the audio engine's
+  // SoundTouchNodes. Separate from the synth feed because the engine
+  // shifts the audible stems via SoundTouch's pitchSemitones param,
+  // not by remapping note pitches.
+  useEffect(() => {
+    engineRef.current?.setPitchSemitones(pitchShiftSemitones);
+  }, [pitchShiftSemitones]);
 
   // Drive the position display while playing; tick the loop watcher too.
   useEffect(() => {
@@ -981,6 +1027,41 @@ export function Player({ songId }: PlayerProps) {
             </styled.span>
           </HStack>
 
+          <HStack gap="3" alignItems="center">
+            <styled.span fontSize="sm" opacity="0.85" minWidth="56px">
+              Pitch
+            </styled.span>
+            <Box flex="1">
+              <Slider.Root
+                value={[pitchShiftSemitones]}
+                onValueChange={(d) => onPitchChange(d.value[0] ?? 0)}
+                min={-12}
+                max={12}
+                step={1}
+                aria-label={["pitch transpose"]}
+              >
+                <Slider.Control>
+                  <Slider.Track>
+                    <Slider.Range />
+                  </Slider.Track>
+                  <Slider.Thumb index={0}>
+                    <Slider.HiddenInput />
+                  </Slider.Thumb>
+                </Slider.Control>
+              </Slider.Root>
+            </Box>
+            <styled.span
+              fontVariantNumeric="tabular-nums"
+              fontSize="sm"
+              opacity="0.7"
+              minWidth="42px"
+              textAlign="right"
+            >
+              {pitchShiftSemitones > 0 ? "+" : ""}
+              {pitchShiftSemitones} st
+            </styled.span>
+          </HStack>
+
           <TabSourceCard
             songId={songId}
             offsetSec={midiOffsetSec}
@@ -1072,6 +1153,7 @@ export function Player({ songId }: PlayerProps) {
             onClose={() => setLyricsOpen(false)}
             width={lyricsWidth}
             onResize={setLyricsWidth}
+            pitchShiftSemitones={pitchShiftSemitones}
           />
         </GridItem>
       )}
@@ -1852,6 +1934,12 @@ interface LyricsPanelProps {
   width: number;
   /** Called with the proposed new width while the user drags the handle. */
   onResize: (next: number) => void;
+  /**
+   * Global pitch transpose. Display-only: the stored `value` is left
+   * untouched so flipping back to 0 restores the user's original
+   * chord spellings exactly. 0 = no transposition.
+   */
+  pitchShiftSemitones: number;
 }
 
 /**
@@ -1866,7 +1954,14 @@ interface LyricsPanelProps {
  * drag-handle on the left edge resizes the grid column live; the
  * parent persists the chosen width to localStorage.
  */
-function LyricsPanel({ value, onChange, onClose, width, onResize }: LyricsPanelProps) {
+function LyricsPanel({
+  value,
+  onChange,
+  onClose,
+  width,
+  onResize,
+  pitchShiftSemitones,
+}: LyricsPanelProps) {
   const [editing, setEditing] = useState(value.length === 0);
   const [draft, setDraft] = useState(value);
   useEffect(() => {
@@ -1986,7 +2081,9 @@ function LyricsPanel({ value, onChange, onClose, width, onResize }: LyricsPanelP
           whiteSpace="pre-wrap"
           opacity={value ? "1" : "0.5"}
         >
-          {value ? renderLyricsWithChords(value) : "(no lyrics — click Edit to paste)"}
+          {value
+            ? renderLyricsWithChords(value, pitchShiftSemitones)
+            : "(no lyrics — click Edit to paste)"}
         </styled.pre>
       )}
     </Box>
@@ -2040,10 +2137,20 @@ function isChordLine(line: string): boolean {
  * non-chord parts so `<pre>`'s whitespace handling stays intact —
  * chord-over-lyric alignment depends on every space and newline
  * being preserved verbatim.
+ *
+ * When `pitchShift !== 0`, each chord token is transposed by that
+ * many semitones. The flat/sharp preference for the *transposed*
+ * names is decided once per call by scanning the whole lyrics block,
+ * so a song that originally used flats stays in flats after the
+ * shift. Chord-position alignment can drift slightly because a
+ * transposed name may have more or fewer characters than the
+ * original (`A` → `Bb`); the user can re-align in edit mode if
+ * that matters.
  */
-function renderLyricsWithChords(text: string): ReactNode[] {
+function renderLyricsWithChords(text: string, pitchShift: number): ReactNode[] {
   const parts: ReactNode[] = [];
   const lines = text.split("\n");
+  const preferFlats = pitchShift === 0 ? false : preferFlatsForLyrics(text);
   let keyCounter = 0;
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
@@ -2052,9 +2159,10 @@ function renderLyricsWithChords(text: string): ReactNode[] {
     for (const match of line.matchAll(re)) {
       const start = match.index ?? 0;
       if (start > lastIdx) parts.push(line.slice(lastIdx, start));
+      const label = pitchShift === 0 ? match[0] : transposeChord(match[0], pitchShift, preferFlats);
       parts.push(
         <styled.span key={keyCounter++} color="tomato.11" fontWeight="semibold">
-          {match[0]}
+          {label}
         </styled.span>,
       );
       lastIdx = start + match[0].length;

@@ -155,14 +155,32 @@ export function Tab({
   // Memoise so the `?? []` fallback doesn't churn the optimizer on
   // every parent render when no cuts exist.
   const cuts = useMemo(() => edits.cuts ?? [], [edits.cuts]);
+  const pitchShift = edits.pitchShiftSemitones ?? 0;
   const fingeredNotes = useMemo(() => {
-    if (explicitTab) {
+    if (explicitTab && pitchShift === 0) {
       // Explicit fingering already includes string/fret; cuts still
       // apply (they're audio-time edits).
       return applyCutsToNotes(explicitTab, cuts) as TabNote[];
     }
-    return fingerNotes(applyCutsToNotes(mappedBass, cuts) as readonly BassNote[]);
-  }, [explicitTab, mappedBass, cuts]);
+    // Either no explicit tab OR pitch is transposed: route through the
+    // optimizer so the fretboard fingering matches the new pitches.
+    // When `pitchShift !== 0` with an explicit tab present we forfeit
+    // the human-authored fingering for correctness — flipping pitch
+    // back to 0 restores it.
+    const baseBass = applyCutsToNotes(mappedBass, cuts) as readonly BassNote[];
+    const shifted =
+      pitchShift === 0
+        ? baseBass
+        : baseBass.map(
+            (n): BassNote => ({
+              pitch: n.pitch + pitchShift,
+              startSec: n.startSec,
+              durSec: n.durSec,
+              velocity: n.velocity,
+            }),
+          );
+    return fingerNotes(shifted);
+  }, [explicitTab, mappedBass, cuts, pitchShift]);
   const displayNotes = useMemo(() => applyEdits(fingeredNotes, edits), [fingeredNotes, edits]);
 
   // Apply the user's beat-grid calibration (offset + speed) to the

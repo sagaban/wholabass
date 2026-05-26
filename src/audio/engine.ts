@@ -22,6 +22,10 @@ export type StemVolumes = Record<StemName, number>;
 /** The minimal surface we need from a tempo-stretching worklet node. */
 export interface StretcherNode extends AudioNode {
   readonly tempo: AudioParam;
+  /** Pitch shift in semitones (0 = original). SoundTouch handles this
+   *  independently of tempo, so changing pitch alone doesn't speed the
+   *  song up or down. */
+  readonly pitchSemitones: AudioParam;
 }
 
 export type StretcherFactory = (ctx: AudioContext) => StretcherNode;
@@ -106,6 +110,7 @@ export class StemEngine {
   private soloed: StemFlags = { ...ZERO_FLAGS };
   private masterVolume = 1;
   private tempo = 1.0;
+  private pitchSemitones = 0;
   private loop: LoopRegion | null = null;
 
   constructor(ctx: AudioContext, stretcherFactory: StretcherFactory) {
@@ -129,6 +134,7 @@ export class StemEngine {
       if (!this.stretchers[name]) {
         const s = this.stretcherFactory(this.ctx);
         s.tempo.setValueAtTime(this.tempo, this.ctx.currentTime);
+        s.pitchSemitones.setValueAtTime(this.pitchSemitones, this.ctx.currentTime);
         this.stretchers[name] = s;
       }
       if (!this.gains[name]) {
@@ -229,6 +235,31 @@ export class StemEngine {
       s.tempo.setValueAtTime(s.tempo.value, now);
       s.tempo.linearRampToValueAtTime(next, now + RAMP_SECONDS);
     }
+  }
+
+  /**
+   * Transpose the audible stems by `semitones` without changing tempo.
+   * SoundTouch handles pitch/tempo independently, so this drives just
+   * the `pitchSemitones` AudioParam — no need to re-anchor playback
+   * position the way setTempo does. Ramped briefly so a slider drag
+   * doesn't click.
+   */
+  setPitchSemitones(semitones: number): void {
+    const next = clamp(semitones, -12, 12);
+    if (next === this.pitchSemitones) return;
+    this.pitchSemitones = next;
+    const now = this.ctx.currentTime;
+    for (const name of STEM_NAMES) {
+      const s = this.stretchers[name];
+      if (!s) continue;
+      s.pitchSemitones.cancelScheduledValues(now);
+      s.pitchSemitones.setValueAtTime(s.pitchSemitones.value, now);
+      s.pitchSemitones.linearRampToValueAtTime(next, now + RAMP_SECONDS);
+    }
+  }
+
+  getPitchSemitones(): number {
+    return this.pitchSemitones;
   }
 
   getVolume(stem: StemName): number {
