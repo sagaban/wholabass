@@ -1031,10 +1031,14 @@ function TabSurface({
             oldPh.setAttribute("x2", "-10");
           }
           activeIdxRef.current = idx;
-          // Auto-scroll active row into the viewport.
-          const rowEl = systemElsRef.current.get(idx);
-          if (rowEl) {
-            rowEl.scrollIntoView({ block: "nearest", behavior: "smooth" });
+          // Auto-scroll so the active row *and* the next one are
+          // visible — scrolling the row below the playhead into view
+          // keeps a row of look-ahead so the user can read what's
+          // coming. Falls back to the active row itself on the last
+          // system (no row below).
+          const lookaheadEl = systemElsRef.current.get(idx + 1) ?? systemElsRef.current.get(idx);
+          if (lookaheadEl) {
+            lookaheadEl.scrollIntoView({ block: "nearest", behavior: "smooth" });
           }
         }
       }
