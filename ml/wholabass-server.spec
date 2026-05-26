@@ -47,9 +47,12 @@ datas += collect_data_files("torchcrepe")    # CREPE model weights
 datas += collect_data_files("soundfile")
 datas += collect_data_files("yt_dlp")        # extractor configs
 datas += collect_data_files("torchcodec")
-# Don't bundle demucs model weights — they download on first use into
-# the user's torch hub cache (~80 MB per model). Bundling would balloon
-# the binary.
+# demucs's `remote/*.txt` manifests list which model weights to fetch
+# and where their hashes live — without them `get_model()` blows up
+# at startup. The actual `.th` weight files stay download-on-first-use
+# (~80 MB per model into the user's torch hub cache), but the
+# manifests have to ship with the bundle.
+datas += collect_data_files("demucs")
 
 a = Analysis(
     ["server.py"],

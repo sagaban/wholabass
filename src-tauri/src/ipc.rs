@@ -24,24 +24,33 @@ struct Inner {
 }
 
 impl Sidecar {
-    /// Spawn the sidecar, preferring the bundled binary in a packaged
-    /// build and falling back to `uv run python server.py` when running
-    /// from a dev checkout.
+    /// Spawn the sidecar, preferring `uv run python server.py` when we
+    /// can see the dev checkout (a sibling `ml/server.py` resolvable
+    /// from `CARGO_MANIFEST_DIR`) and falling back to the bundled
+    /// PyInstaller binary otherwise.
     ///
-    /// In a Tauri bundle the PyInstaller-compiled `wholabass-server`
-    /// binary lives in the app's resource dir alongside a static
-    /// `ffmpeg` (both shipped via `bundle.externalBin`). We export
-    /// `FFMPEG_LOCATION` so `yt-dlp` finds the sibling binary without
-    /// needing a system install. The dev fallback exists so
-    /// `pnpm tauri dev` keeps working without first running the
-    /// 1-2 minute PyInstaller build.
+    /// Dev gets priority because Tauri 2 copies externalBin entries
+    /// into `target/debug/` for `cargo run` / `pnpm tauri dev` — so
+    /// the bundled binary IS present next to the dev exe, and
+    /// preferring it would mean re-running the 1-2 minute PyInstaller
+    /// build on every Python edit. The bundled path remains the
+    /// fallback for the packaged `.app` where `ml/server.py` isn't
+    /// reachable.
+    ///
+    /// In the bundled path we also export `FFMPEG_LOCATION` so the
+    /// sibling static `ffmpeg` binary picked up by yt-dlp works
+    /// without a system install.
     pub async fn spawn(app: &tauri::AppHandle) -> Result<Self> {
+        if let Ok(project_root) = locate_project_root() {
+            let ml_dir = project_root.join("ml");
+            if ml_dir.join("server.py").exists() {
+                return Self::spawn_in_dir(&ml_dir).await;
+            }
+        }
         if let Some(packaged) = locate_bundled_sidecar(app) {
             return Self::spawn_bundled(&packaged.binary, packaged.ffmpeg.as_deref()).await;
         }
-        let project_root = locate_project_root()
-            .context("could not locate project root containing ml/server.py")?;
-        Self::spawn_in_dir(&project_root.join("ml")).await
+        bail!("no sidecar found: ml/server.py missing and no bundled wholabass-server next to the executable");
     }
 
     /// Direct-spawn the bundled binary (no `uv` involvement). Used in
