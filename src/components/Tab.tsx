@@ -449,11 +449,18 @@ function TabSurface({
 
   // Compute the song-time → (system, local x) mapping used by every
   // mouse-driven coord conversion. Memoised on systems only.
+  //
+  // Systems are contiguous, so the first one whose `endSec` is past
+  // `timeSec` is the match. This also clamps correctly at both ends: a
+  // time *before* the first system (e.g. seeking to 0 with a negative
+  // playhead offset) returns system 0, and a time past the last
+  // returns the last system. The old `start <= t < end` form fell
+  // through to the last index for below-first times, which jumped the
+  // auto-scroll to the bottom of the tab when seeking back to 0.
   const findSystem = useCallback(
     (timeSec: number): number => {
       for (let i = 0; i < systems.length; i++) {
-        const sys = systems[i];
-        if (timeSec >= sys.startSec && timeSec < sys.endSec) return i;
+        if (timeSec < systems[i].endSec) return i;
       }
       return systems.length - 1;
     },
@@ -1031,14 +1038,27 @@ function TabSurface({
             oldPh.setAttribute("x2", "-10");
           }
           activeIdxRef.current = idx;
-          // Auto-scroll so the active row *and* the next one are
-          // visible — scrolling the row below the playhead into view
-          // keeps a row of look-ahead so the user can read what's
-          // coming. Falls back to the active row itself on the last
-          // system (no row below).
-          const lookaheadEl = systemElsRef.current.get(idx + 1) ?? systemElsRef.current.get(idx);
-          if (lookaheadEl) {
-            lookaheadEl.scrollIntoView({ block: "nearest", behavior: "smooth" });
+          // Auto-scroll to keep the active row visible plus a row of
+          // look-ahead below it. We compute the scroll delta by hand
+          // (rather than scrollIntoView) so the active row is never
+          // pushed off the top: scrolling the look-ahead row into view
+          // with `block: "nearest"` would anchor it to the top edge
+          // when it sits above the viewport, hiding the playhead row.
+          const container = scrollRef.current;
+          const rowEl = systemElsRef.current.get(idx);
+          if (container && rowEl) {
+            const lookEl = systemElsRef.current.get(idx + 1) ?? rowEl;
+            const c = container.getBoundingClientRect();
+            const row = rowEl.getBoundingClientRect();
+            const look = lookEl.getBoundingClientRect();
+            if (row.top < c.top) {
+              // Active row above the viewport — bring its top into view.
+              container.scrollBy({ top: row.top - c.top, behavior: "smooth" });
+            } else if (look.bottom > c.bottom) {
+              // Active row's look-ahead extends past the bottom — scroll
+              // just enough to reveal it, keeping the active row above.
+              container.scrollBy({ top: look.bottom - c.bottom, behavior: "smooth" });
+            }
           }
         }
       }
