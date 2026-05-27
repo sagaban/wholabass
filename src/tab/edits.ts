@@ -293,6 +293,58 @@ export function normalizeMixerState(raw: unknown): MixerState | null {
 export const MIXER_STRIP_KEYS = STRIP_KEYS;
 
 /**
+ * Re-key note edits when the MIDI offset / speed changes.
+ *
+ * Note ids encode the *mapped* start time (`raw / speed + offset`), so
+ * changing speed or offset shifts every note's mapped time and would
+ * orphan every `replace` / `delete` op — silently dropping the user's
+ * string reassignments. This rebuilds the ids against the new mapping.
+ *
+ * `replace` / `delete` are paired through the actual raw note list: for
+ * each raw note we compute its id under the old mapping and under the
+ * new one, then rewrite any op whose id matches the old. Pairing by the
+ * real notes (rather than parsing the rounded id back out) keeps the
+ * result exact — the rewritten id is byte-for-byte what `applyEdits`
+ * will compute for that note after the change.
+ *
+ * `add` ops carry their own start time (a user-placed note, not tied to
+ * a raw MIDI note), so they're re-mapped directly: old mapped → raw →
+ * new mapped, with durations rescaled by the speed ratio.
+ *
+ * Ops whose note no longer exists in the MIDI are left untouched (they
+ * were already orphaned).
+ */
+export function remapNoteEditTimes(
+  ops: readonly EditOp[],
+  rawNotes: readonly { startSec: number; pitch: number }[],
+  oldOffset: number,
+  oldSpeed: number,
+  newOffset: number,
+  newSpeed: number,
+): EditOp[] {
+  if (ops.length === 0) return ops.slice();
+  if (oldOffset === newOffset && oldSpeed === newSpeed) return ops.slice();
+
+  const idMap = new Map<NoteId, NoteId>();
+  for (const n of rawNotes) {
+    const oldId = noteId(n.startSec / oldSpeed + oldOffset, n.pitch);
+    const newId = noteId(n.startSec / newSpeed + newOffset, n.pitch);
+    if (oldId !== newId) idMap.set(oldId, newId);
+  }
+
+  return ops.map((op) => {
+    if (op.kind === "add") {
+      const raw = (op.startSec - oldOffset) * oldSpeed;
+      const startSec = raw / newSpeed + newOffset;
+      const durSec = (op.durSec * oldSpeed) / newSpeed;
+      return { ...op, startSec, durSec, id: noteId(startSec, op.pitch) };
+    }
+    const mapped = idMap.get(op.id);
+    return mapped ? { ...op, id: mapped } : op;
+  });
+}
+
+/**
  * Append a cut span. Spans are stored in *sequential* order: each one
  * is interpreted in the time domain that results from applying every
  * earlier cut. That matches the user's mental model (they ripple-

@@ -9,6 +9,7 @@ import {
   applyNoteEditsToBass,
   noteId,
   normalizeMixerState,
+  remapNoteEditTimes,
   removeCutAt,
   removeSectionAt,
   tabNoteId,
@@ -393,5 +394,67 @@ describe("normalizeMixerState", () => {
     expect(out?.vocals).toEqual({ volume: 0.6, muted: true, soloed: false });
     expect(out?.drums).toEqual(DEFAULT_MIXER.drums);
     expect(out?.midi).toEqual(DEFAULT_MIXER.midi);
+  });
+});
+
+describe("remapNoteEditTimes", () => {
+  // Two raw MIDI notes at 4.0s and 8.0s.
+  const rawNotes = [
+    { startSec: 4, pitch: 40 },
+    { startSec: 8, pitch: 45 },
+  ];
+
+  test("re-keys replace/delete ids so they still match after a speed change", () => {
+    // Edits made at speed 1.0 / offset 0 → ids encode raw time.
+    const ops: EditOp[] = [
+      { kind: "replace", id: noteId(4, 40), string: 2, fret: 7 },
+      { kind: "delete", id: noteId(8, 45) },
+    ];
+    // Change speed 1.0 → 2.0 (notes now at 2.0s and 4.0s mapped).
+    const out = remapNoteEditTimes(ops, rawNotes, 0, 1, 0, 2);
+    expect(out[0]).toMatchObject({ kind: "replace", id: noteId(2, 40), string: 2, fret: 7 });
+    expect(out[1]).toMatchObject({ kind: "delete", id: noteId(4, 45) });
+  });
+
+  test("re-keys for an offset change", () => {
+    const ops: EditOp[] = [{ kind: "replace", id: noteId(4, 40), string: 1, fret: 3 }];
+    // offset 0 → +1.5 at speed 1.0 → note moves 4.0 → 5.5.
+    const out = remapNoteEditTimes(ops, rawNotes, 0, 1, 1.5, 1);
+    expect(out[0]).toMatchObject({ id: noteId(5.5, 40) });
+  });
+
+  test("add ops re-map their own start + duration by the speed ratio", () => {
+    const ops: EditOp[] = [
+      {
+        kind: "add",
+        id: noteId(2, 50),
+        pitch: 50,
+        startSec: 2,
+        durSec: 0.5,
+        string: 0,
+        fret: 0,
+      },
+    ];
+    // At old speed 1.0 mapped=2.0 → raw=2.0. New speed 2.0 → mapped=1.0,
+    // dur 0.5 → 0.25.
+    const out = remapNoteEditTimes(ops, rawNotes, 0, 1, 0, 2);
+    expect(out[0]).toMatchObject({ kind: "add", startSec: 1, durSec: 0.25, id: noteId(1, 50) });
+  });
+
+  test("leaves ops untouched when the note no longer exists in the MIDI", () => {
+    const ops: EditOp[] = [{ kind: "replace", id: noteId(99, 60), string: 0, fret: 0 }];
+    const out = remapNoteEditTimes(ops, rawNotes, 0, 1, 0, 2);
+    expect(out[0]).toEqual(ops[0]);
+  });
+
+  test("no-op when mapping is unchanged", () => {
+    const ops: EditOp[] = [{ kind: "delete", id: noteId(4, 40) }];
+    const out = remapNoteEditTimes(ops, rawNotes, 0, 1, 0, 1);
+    expect(out).toEqual(ops);
+  });
+
+  test("empty ops list returns a copy", () => {
+    const out = remapNoteEditTimes([], rawNotes, 0, 1, 0, 2);
+    expect(out).toEqual([]);
   });
 });

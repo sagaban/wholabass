@@ -41,6 +41,7 @@ import {
   applyCutsToNotes,
   applyNoteEditsToBass,
   normalizeMixerState,
+  remapNoteEditTimes,
   removeRestById,
   removeSectionAt,
   updateRestById,
@@ -133,6 +134,10 @@ export function Player({ songId }: PlayerProps) {
   const engineRef = useRef<StemEngine | null>(null);
   const synthRef = useRef<MidiSynth | null>(null);
   const bassNotesRef = useRef<BassNote[]>([]);
+  // Raw (un-mapped) MIDI notes — kept so the offset/speed setters can
+  // re-key note edits against the actual note list when the mapping
+  // changes, instead of letting their ids orphan.
+  const rawBassRef = useRef<readonly BassNote[]>([]);
   const [load, setLoad] = useState<LoadStatus>({ kind: "loading" });
   const [position, setPosition] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -336,7 +341,22 @@ export function Player({ songId }: PlayerProps) {
 
   const onSetMidiOffset = useCallback(
     (offsetSec: number) => {
-      mutateEdits((prev) => ({ ...prev, midiOffsetSec: offsetSec }));
+      mutateEdits((prev) => {
+        const oldOffset = prev.midiOffsetSec ?? 0;
+        const oldSpeed = prev.midiSpeed && prev.midiSpeed > 0 ? prev.midiSpeed : 1;
+        if (offsetSec === oldOffset) return prev;
+        // Re-key note edits so a later offset nudge doesn't orphan the
+        // user's string reassignments (their ids encode mapped time).
+        const notes = remapNoteEditTimes(
+          prev.notes,
+          rawBassRef.current,
+          oldOffset,
+          oldSpeed,
+          offsetSec,
+          oldSpeed,
+        );
+        return { ...prev, midiOffsetSec: offsetSec, notes };
+      });
     },
     [mutateEdits],
   );
@@ -350,7 +370,20 @@ export function Player({ songId }: PlayerProps) {
   const onSetMidiSpeed = useCallback(
     (speed: number) => {
       const clamped = Math.max(0.1, Math.min(5, speed));
-      mutateEdits((prev) => ({ ...prev, midiSpeed: clamped }));
+      mutateEdits((prev) => {
+        const oldOffset = prev.midiOffsetSec ?? 0;
+        const oldSpeed = prev.midiSpeed && prev.midiSpeed > 0 ? prev.midiSpeed : 1;
+        if (clamped === oldSpeed) return prev;
+        const notes = remapNoteEditTimes(
+          prev.notes,
+          rawBassRef.current,
+          oldOffset,
+          oldSpeed,
+          oldOffset,
+          clamped,
+        );
+        return { ...prev, midiSpeed: clamped, notes };
+      });
     },
     [mutateEdits],
   );
@@ -676,6 +709,7 @@ export function Player({ songId }: PlayerProps) {
     void (async () => {
       const raw = await loadBassNotes(songId).catch(() => [] as BassNote[]);
       if (cancelled) return;
+      rawBassRef.current = raw;
       setMappedBass(mapMidiNotes(raw, midiOffsetSec, midiSpeed));
     })();
     return () => {
