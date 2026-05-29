@@ -15,6 +15,22 @@ import { ensureBravuraLoaded } from "./audio/smufl-font";
 applyMode(readStoredMode());
 ensureBravuraLoaded();
 
+// Print → temporarily strip the `.dark` class so the document renders
+// in light-theme tokens (white canvas, dark text, light section bands).
+// Without this the note rectangles fill with the dark-mode `canvas`
+// token and print as black blocks on a white page. The previous mode
+// is restored when the print dialog closes.
+{
+  let wasDark = false;
+  window.addEventListener("beforeprint", () => {
+    wasDark = document.documentElement.classList.contains("dark");
+    if (wasDark) document.documentElement.classList.remove("dark");
+  });
+  window.addEventListener("afterprint", () => {
+    if (wasDark) document.documentElement.classList.add("dark");
+  });
+}
+
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <App />

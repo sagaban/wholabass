@@ -951,7 +951,7 @@ export function Player({ songId }: PlayerProps) {
       alignItems="start"
       w="full"
     >
-      <GridItem>
+      <GridItem data-print-hide>
         <VStack gap="3" alignItems="stretch">
           <HStack gap="3" alignItems="center">
             <Button onClick={onTogglePlay} size="sm">
@@ -1146,6 +1146,14 @@ export function Player({ songId }: PlayerProps) {
           )}
 
           <HStack justifyContent="flex-end" gap="2">
+            <Button
+              size="xs"
+              variant="subtle"
+              onClick={() => window.print()}
+              aria-label="print tab to PDF"
+            >
+              Print tab
+            </Button>
             <Button size="xs" variant="subtle" onClick={() => setLyricsOpen((v) => !v)}>
               {lyricsOpen ? "Hide lyrics" : "Show lyrics"}
             </Button>
@@ -1180,7 +1188,7 @@ export function Player({ songId }: PlayerProps) {
       </GridItem>
 
       {lyricsOpen && (
-        <GridItem minWidth="0">
+        <GridItem minWidth="0" data-print-hide>
           <LyricsPanel
             value={edits.lyrics ?? ""}
             onChange={onSetLyrics}

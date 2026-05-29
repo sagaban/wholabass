@@ -1101,6 +1101,7 @@ function TabSurface({
         gap="1"
         p="2"
         userSelect="none"
+        data-print-expand
       >
         {systems.map((sys, idx) => {
           const sectionForThisRow =
@@ -1494,7 +1495,13 @@ function TabSystemRow({
   const stemBottom = stringIndexToY(0, layout) + STEM_LENGTH_PX;
 
   return (
-    <Box ref={registerSystemEl} position="relative" width={`${system.widthPx}px`} flexShrink="0">
+    <Box
+      ref={registerSystemEl}
+      position="relative"
+      width={`${system.widthPx}px`}
+      flexShrink="0"
+      data-print-row
+    >
       {/* oxlint-disable-next-line jsx-a11y/click-events-have-key-events */}
       <svg
         width={system.widthPx}
@@ -1950,6 +1957,7 @@ function TabSystemRow({
             strokeWidth={1}
             strokeDasharray="3 2"
             pointerEvents="none"
+            data-marquee
           />
         )}
 
@@ -2042,6 +2050,7 @@ function TabSystemRow({
           y2={layout.topPadding + (layout.stringCount - 1) * layout.stringLineSpacing + 8}
           stroke="var(--colors-indigo-9)"
           strokeWidth={2}
+          data-playhead
         />
       </svg>
 
