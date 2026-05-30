@@ -28,6 +28,7 @@ import {
   type BassNote,
   type MidiTrackInfo,
 } from "@/audio/midi";
+import { startCountIn, type CountInHandle } from "@/audio/click-track";
 import { MidiSynth } from "@/audio/midi-synth";
 import { importSongsterrBass } from "@/audio/songsterr";
 import { StemMixer } from "@/components/StemMixer";
@@ -125,8 +126,20 @@ function normalizeEditsFile(raw: unknown): EditsFile {
       typeof r.pitchShiftSemitones === "number" && Number.isFinite(r.pitchShiftSemitones)
         ? Math.max(-12, Math.min(12, Math.round(r.pitchShiftSemitones)))
         : 0,
+    countInBeats:
+      typeof r.countInBeats === "number" && Number.isFinite(r.countInBeats)
+        ? clampCountInBeats(r.countInBeats)
+        : 0,
     ...(mixer ? { mixer } : {}),
   };
+}
+
+const COUNT_IN_OPTIONS = [0, 1, 2, 4] as const;
+function clampCountInBeats(n: number): number {
+  const rounded = Math.round(n);
+  // Snap to the supported preset values so a hand-edited file can't
+  // request "3.5 beats" and break the dropdown's selected state.
+  return COUNT_IN_OPTIONS.includes(rounded as (typeof COUNT_IN_OPTIONS)[number]) ? rounded : 0;
 }
 
 export function Player({ songId }: PlayerProps) {
@@ -138,6 +151,11 @@ export function Player({ songId }: PlayerProps) {
   // re-key note edits against the actual note list when the mapping
   // changes, instead of letting their ids orphan.
   const rawBassRef = useRef<readonly BassNote[]>([]);
+  // beats.json mirrored for the count-in click track. Loaded lazily;
+  // a null until the fetch resolves means we fall back to BPM-only
+  // count-in (or skip it if BPM is missing too).
+  const beatsRef = useRef<{ tempo_bpm: number; beats: number[] } | null>(null);
+  const countInRef = useRef<CountInHandle | null>(null);
   const [load, setLoad] = useState<LoadStatus>({ kind: "loading" });
   const [position, setPosition] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -620,6 +638,26 @@ export function Player({ songId }: PlayerProps) {
     return () => clearTimeout(timer);
   }, [edits, songId]);
 
+  // Read beats.json for the count-in click track. The same data also
+  // backs onAutoMatchMidi (read on demand), but for the count-in we
+  // want it ready by the time the user presses Play.
+  useEffect(() => {
+    let cancelled = false;
+    beatsRef.current = null;
+    void invoke<{ tempo_bpm: number; beats: number[] }>("read_beats", { songId })
+      .then((b) => {
+        if (!cancelled) beatsRef.current = b;
+      })
+      .catch(() => {
+        // Songs imported before beat tracking ran (or where it failed)
+        // simply won't get a count-in; the toggle stays usable for
+        // future songs.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [songId]);
+
   // Cmd+Z / Cmd+Shift+Z (or Ctrl on non-Mac) undo / redo. Skip when
   // typing in a text field so the section dialog still works normally.
   useEffect(() => {
@@ -802,19 +840,68 @@ export function Player({ songId }: PlayerProps) {
 
   const onTogglePlay = useCallback(() => {
     const engine = engineRef.current;
-    if (!engine || !engine.hasBuffers) return;
-    void ctxRef.current?.resume();
+    const ctx = ctxRef.current;
+    if (!engine || !engine.hasBuffers || !ctx) return;
+    void ctx.resume();
+
+    // If a count-in is currently ticking, treat Play/Pause / Space as
+    // a cancel — same gesture the user already uses to stop playback.
+    if (countInRef.current) {
+      countInRef.current.cancel();
+      countInRef.current = null;
+      setIsPlaying(false);
+      return;
+    }
+
     if (engine.isPlaying) {
       engine.pause();
       synthRef.current?.cancel();
       setPosition(engine.getCurrentTime());
       setIsPlaying(false);
+      return;
+    }
+
+    const count = edits.countInBeats ?? 0;
+    if (count > 0) {
+      const beats = beatsRef.current;
+      // The clicks themselves are timed off the local beat track; the
+      // engine.play() call below stays at the playhead, untouched.
+      countInRef.current = startCountIn({
+        ctx,
+        beats: beats?.beats ?? [],
+        fallbackBpm: beats?.tempo_bpm ?? 120,
+        count,
+        atSec: engine.getCurrentTime(),
+        onComplete: () => {
+          countInRef.current = null;
+          engine.play();
+          synthRef.current?.schedule(engine.getCurrentTime(), engine.getTempo());
+        },
+      });
+      setIsPlaying(true);
     } else {
       engine.play();
       synthRef.current?.schedule(engine.getCurrentTime(), engine.getTempo());
       setIsPlaying(true);
     }
-  }, []);
+  }, [edits.countInBeats]);
+
+  // Cancel a running count-in if the song changes mid-tick (e.g. user
+  // navigates back to the library). Otherwise the timer would fire on a
+  // disposed engine.
+  useEffect(() => {
+    return () => {
+      countInRef.current?.cancel();
+      countInRef.current = null;
+    };
+  }, [songId]);
+
+  const onSetCountInBeats = useCallback(
+    (n: number) => {
+      mutateEdits((prev) => ({ ...prev, countInBeats: clampCountInBeats(n) }));
+    },
+    [mutateEdits],
+  );
 
   // Spacebar = play/pause when no text field has focus.
   useEffect(() => {
@@ -960,6 +1047,7 @@ export function Player({ songId }: PlayerProps) {
             <styled.span fontVariantNumeric="tabular-nums" opacity="0.85">
               {fmtTime(position)} / {fmtTime(duration)}
             </styled.span>
+            <CountInPicker value={edits.countInBeats ?? 0} onChange={onSetCountInBeats} />
           </HStack>
 
           <Slider.Root
@@ -1256,6 +1344,38 @@ async function loadStem(ctx: AudioContext, songId: string, stem: StemName): Prom
   const bytes = await invoke<ArrayBuffer>("read_stem", { songId, stem });
   // decodeAudioData detaches the input buffer on some platforms; copy to be safe.
   return ctx.decodeAudioData(bytes.slice(0));
+}
+
+interface CountInPickerProps {
+  value: number;
+  onChange: (n: number) => void;
+}
+
+function CountInPicker({ value, onChange }: CountInPickerProps) {
+  return (
+    <HStack gap="1" alignItems="center">
+      <styled.span fontSize="xs" opacity="0.7">
+        count-in
+      </styled.span>
+      <styled.select
+        value={String(value)}
+        onChange={(e) => onChange(Number(e.currentTarget.value))}
+        aria-label="count-in beats"
+        fontSize="xs"
+        px="1"
+        py="0.5"
+        rounded="sm"
+        bg="bg.subtle"
+        borderWidth="1px"
+        borderColor="border.default"
+      >
+        <option value="0">off</option>
+        <option value="1">1</option>
+        <option value="2">2</option>
+        <option value="4">4</option>
+      </styled.select>
+    </HStack>
+  );
 }
 
 function fmtTime(seconds: number): string {

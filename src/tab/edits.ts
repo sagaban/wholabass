@@ -216,6 +216,13 @@ export interface EditsFile {
    */
   mixer?: MixerState;
   /**
+   * Number of click-track beats to count off before each Play press,
+   * the way a drummer counts a band in. 0 = off. Stored per song so a
+   * ballad can run with 2 and a fast tune can run with 4. Clicked at
+   * the local tempo derived from beats.json.
+   */
+  countInBeats?: number;
+  /**
    * Global transpose in semitones applied to:
    *   - the audio stems (via SoundTouch's pitchSemitones AudioParam,
    *     preserving tempo),
