@@ -653,6 +653,33 @@ function TabSurface({
    * the next note (A slides into G's onset). When no surviving note
    * follows, the span ends at the latest selected note's `endSec`.
    */
+  /**
+   * Move every selected note one string up (toward the higher-pitch
+   * string, visually upward in the tab) or down, keeping the pitch
+   * fixed by recomputing the fret. Notes that would land on an
+   * invalid string (off either end) or off the fretboard (negative
+   * fret or past fret 24) are left in place — a chord shape may have
+   * some movable voices and some stuck ones; partial moves beat
+   * refusing the whole gesture. Whole shift is one undo step.
+   */
+  const ctxShiftSelectionString = useCallback(
+    (direction: -1 | 1) => {
+      if (selection.size === 0) return;
+      const picked = tabNotes.filter((n) => selection.has(tabNoteId(n)));
+      if (picked.length === 0) return;
+      transact(() => {
+        for (const n of picked) {
+          const newString = n.string + direction;
+          if (newString < 0 || newString >= DEFAULT_TUNING.length) continue;
+          const newFret = n.pitch - DEFAULT_TUNING[newString];
+          if (newFret < 0 || newFret > 24) continue;
+          onEdit({ kind: "replace", id: tabNoteId(n), string: newString, fret: newFret });
+        }
+      });
+    },
+    [selection, tabNotes, transact, onEdit],
+  );
+
   const ctxRippleDelete = useCallback(() => {
     if (selection.size === 0) return;
     const picked = tabNotes
@@ -1227,6 +1254,7 @@ function TabSurface({
           canCopy={selection.size > 0}
           canPaste={clipboardRef.current.length > 0}
           canRippleDelete={selection.size > 0}
+          canShiftStrings={selection.size > 0}
           onCopy={() => {
             ctxCopy();
             closeCtxMenu();
@@ -1237,6 +1265,14 @@ function TabSurface({
           }}
           onRippleDelete={() => {
             ctxRippleDelete();
+            closeCtxMenu();
+          }}
+          onShiftStringUp={() => {
+            ctxShiftSelectionString(1);
+            closeCtxMenu();
+          }}
+          onShiftStringDown={() => {
+            ctxShiftSelectionString(-1);
             closeCtxMenu();
           }}
           onPaste={() => {
@@ -1264,9 +1300,12 @@ interface ContextMenuProps {
   canCopy: boolean;
   canPaste: boolean;
   canRippleDelete: boolean;
+  canShiftStrings: boolean;
   onCopy: () => void;
   onCut: () => void;
   onRippleDelete: () => void;
+  onShiftStringUp: () => void;
+  onShiftStringDown: () => void;
   onPaste: () => void;
   onInsertEmptyBar: () => void;
   onDuplicateBar: () => void;
@@ -1279,9 +1318,12 @@ function ContextMenu({
   canCopy,
   canPaste,
   canRippleDelete,
+  canShiftStrings,
   onCopy,
   onCut,
   onRippleDelete,
+  onShiftStringUp,
+  onShiftStringDown,
   onPaste,
   onInsertEmptyBar,
   onDuplicateBar,
@@ -1305,6 +1347,16 @@ function ContextMenu({
       label: "Ripple delete (close gap)",
       disabled: !canRippleDelete,
       run: onRippleDelete,
+    },
+    {
+      label: "Move up a string (same pitch)",
+      disabled: !canShiftStrings,
+      run: onShiftStringUp,
+    },
+    {
+      label: "Move down a string (same pitch)",
+      disabled: !canShiftStrings,
+      run: onShiftStringDown,
     },
     { label: "Paste here", disabled: !canPaste, run: onPaste },
     { label: "Insert empty bar after this", run: onInsertEmptyBar },
