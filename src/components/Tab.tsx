@@ -73,6 +73,30 @@ interface BeatsPayload {
 
 type LoadStatus = "loading" | "ready" | { kind: "error"; message: string };
 
+/**
+ * Older Songsterr imports stored fingerings authored against the source
+ * tab's tuning (5-string with low B, drop-D, etc.) — alphaTab's
+ * `realValue` correctly carried the pitch, but the matching
+ * `string + fret` only added up under that tuning. The renderer +
+ * popover assume `DEFAULT_TUNING` (E-A-D-G), so a note like
+ * `string=0, fret=7, pitch=28` read as a broken invariant on screen.
+ *
+ * Re-pick the placement against standard tuning when the imported one
+ * doesn't add up. Notes whose pitch is off the standard fretboard
+ * (below E1) are parked at open E so the visual at least renders —
+ * the synth still plays their original pitch from the MIDI.
+ */
+function normaliseTabToStandardTuning(notes: readonly TabNote[]): TabNote[] {
+  return notes.map((n) => {
+    if (n.pitch === DEFAULT_TUNING[n.string] + n.fret) return n;
+    const placements = enumeratePlacements(n.pitch, DEFAULT_TUNING);
+    if (placements.length > 0) {
+      return { ...n, string: placements[0].string, fret: placements[0].fret };
+    }
+    return { ...n, string: 0, fret: 0 };
+  });
+}
+
 export function Tab({
   songId,
   tabSourceRev,
@@ -113,6 +137,12 @@ export function Tab({
           songId,
         }).catch(() => null);
         if (cancelled) return;
+        // Older Songsterr imports stored explicit fingerings that
+        // assumed the source's non-standard tuning, leaving the
+        // `pitch / string / fret` invariant broken under the renderer's
+        // standard E-A-D-G. Re-pick the placement here so existing
+        // imports work without re-importing.
+        const normalisedTab = rawTab ? normaliseTabToStandardTuning(rawTab) : null;
         const shift = <T extends BassNote>(n: T): T => ({
           ...n,
           startSec: n.startSec / midiSpeed + midiOffsetSec,
@@ -133,9 +163,9 @@ export function Tab({
         // Explicit tab gets the same midi-offset/speed transform so its
         // notes line up with whatever the user is hearing from bass.mid.
         const shiftedTab =
-          rawTab && (midiOffsetSec !== 0 || midiSpeed !== 1)
-            ? rawTab.map((n) => shift(n))
-            : (rawTab as TabNote[] | null);
+          normalisedTab && (midiOffsetSec !== 0 || midiSpeed !== 1)
+            ? normalisedTab.map((n) => shift(n))
+            : normalisedTab;
         setExplicitTab(shiftedTab);
         setBeats(b);
         setStatus("ready");
@@ -2517,8 +2547,8 @@ function NoteEditPopover({ note, beats, anchorX, anchorY, onEdit, onClose }: Not
           <Popover.Content>
             <Popover.Title>
               <styled.span fontSize="xs" opacity="0.7">
-                pitch {note.pitch} · current {STRING_LABELS[note.string]}
-                {note.fret}
+                {pitchName(note.pitch)} (MIDI {note.pitch}) · {STRING_LABELS[note.string]} string,
+                fret {note.fret}
               </styled.span>
             </Popover.Title>
             <Popover.Body>

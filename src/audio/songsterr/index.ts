@@ -11,6 +11,7 @@ import { invoke } from "@tauri-apps/api/core";
 import * as alphaTab from "@coderline/alphatab";
 import { Midi } from "@tonejs/midi";
 import type { Articulation } from "@/audio/midi";
+import { DEFAULT_TUNING, enumeratePlacements } from "@/tab/optimizer";
 import { SongsterrToAlphaTabConverter } from "./converter";
 import type {
   ConversionWarning,
@@ -170,6 +171,44 @@ function scoreToBassTab(score: alphaTab.model.Score, midiBytes: Uint8Array): Bas
         }
       }
     }
+  }
+
+  // Songsterr songs are often authored on non-standard tunings (5-string
+  // basses with low B, drop-D, half-step-down, etc.). alphaTab's
+  // `realValue` accounts for the source tuning, so the imported pitch
+  // is correct — but the matching `string + fret` only adds up under
+  // that tuning. Renderer + popover assume standard `DEFAULT_TUNING`,
+  // so a note like `string=0, fret=7, realValue=28` reads as a broken
+  // invariant ("E1 should be open E, not E-string fret 7"). For every
+  // such note, re-pick the placement against the standard fretboard so
+  // what the user sees matches what they hear.
+  let normalised = 0;
+  let unreachable = 0;
+  for (const s of scoreNotes) {
+    if (s.pitch === DEFAULT_TUNING[s.string] + s.fret) continue;
+    const placements = enumeratePlacements(s.pitch, DEFAULT_TUNING);
+    if (placements.length > 0) {
+      // Prefer the lowest-string placement — keeps hand position close
+      // to where the original tab implied (lowest = bass-y, in the
+      // common case of imports from low-tuned basses).
+      s.string = placements[0].string;
+      s.fret = placements[0].fret;
+      normalised++;
+    } else {
+      // Pitch is below `DEFAULT_TUNING[0]` (E1) — off the standard
+      // fretboard entirely. Park it on the lowest string at fret 0 so
+      // it still renders; the synth still plays the original pitch.
+      s.string = 0;
+      s.fret = 0;
+      unreachable++;
+    }
+  }
+  if (normalised || unreachable) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      `songsterr import: normalised ${normalised} fingering(s) onto standard tuning` +
+        (unreachable ? ` (${unreachable} note(s) below E1, parked at open E)` : ""),
+    );
   }
 
   const out: BassTabNote[] = [];
