@@ -117,7 +117,7 @@ function normalizeEditsFile(raw: unknown): EditsFile {
     beatsOffsetSec: typeof r.beatsOffsetSec === "number" ? r.beatsOffsetSec : 0,
     beatsSpeed: beatsSpeedRaw > 0.1 && beatsSpeedRaw < 5 ? beatsSpeedRaw : 1,
     playheadOffsetSec:
-      typeof r.playheadOffsetSec === "number" && Math.abs(r.playheadOffsetSec) < 1
+      typeof r.playheadOffsetSec === "number" && Math.abs(r.playheadOffsetSec) <= 2
         ? r.playheadOffsetSec
         : 0,
     lyrics: typeof r.lyrics === "string" ? r.lyrics : "",
@@ -405,7 +405,7 @@ export function Player({ songId }: PlayerProps) {
 
   const onSetPlayheadOffset = useCallback(
     (offsetSec: number) => {
-      const clamped = Math.max(-1, Math.min(1, offsetSec));
+      const clamped = Math.max(-2, Math.min(2, offsetSec));
       mutateEdits((prev) => ({ ...prev, playheadOffsetSec: clamped }));
     },
     [mutateEdits],
