@@ -302,11 +302,12 @@ export class MidiSynth {
     // characteristic pitch wobble. Routed through detune (not frequency)
     // so it composes cleanly with any frequency ramps from slide/bend.
     let lfo: OscillatorNode | undefined;
+    let lfoGain: GainNode | undefined;
     if (a?.vibrato) {
       lfo = this.ctx.createOscillator();
       lfo.type = "sine";
       lfo.frequency.setValueAtTime(6, evt.ctxStart);
-      const lfoGain = this.ctx.createGain();
+      lfoGain = this.ctx.createGain();
       lfoGain.gain.setValueAtTime(30, evt.ctxStart);
       lfo.connect(lfoGain).connect(src.detune);
       lfoGain.connect(sub.detune);
@@ -331,12 +332,27 @@ export class MidiSynth {
     src.addEventListener(
       "ended",
       () => {
+        // The vibrato lfo / lfoGain feed src.detune + sub.detune, so
+        // they need an explicit teardown — disconnecting src/sub only
+        // breaks their *outgoing* connections, not the inbound ones
+        // into their AudioParams. Without this the lfoGain node sticks
+        // around for the AudioContext's lifetime and accumulates
+        // across every vibrato'd note.
         try {
           src.disconnect();
           sub.disconnect();
           subGain.disconnect();
           filter.disconnect();
           gain.disconnect();
+          if (lfo) {
+            try {
+              lfo.stop();
+            } catch {
+              // already stopped
+            }
+            lfo.disconnect();
+          }
+          if (lfoGain) lfoGain.disconnect();
         } catch {
           // Already disconnected.
         }

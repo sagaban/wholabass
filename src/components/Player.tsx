@@ -921,25 +921,54 @@ export function Player({ songId }: PlayerProps) {
     return () => window.removeEventListener("keydown", onKey);
   }, [onTogglePlay]);
 
+  // synth.schedule() rebuilds the entire MIDI graph (~5 audio nodes per
+  // note × hundreds of notes per song). The seek and tempo sliders
+  // dispatch their `onValueChange` per drag tick, so a 1-second drag
+  // would otherwise spawn tens of thousands of audio nodes before the
+  // previous batches could be cleaned up — enough to crash WebKit's
+  // audio thread on macOS, reloading the whole WebView. Coalesce
+  // those calls behind a trailing-edge debounce: the engine.seek /
+  // engine.setTempo side still happens instantly (cheap, bounded), and
+  // the synth catches up once the user stops dragging.
+  const synthScheduleTimerRef = useRef<number | null>(null);
+  const requestSynthSchedule = useCallback(() => {
+    if (synthScheduleTimerRef.current !== null) {
+      window.clearTimeout(synthScheduleTimerRef.current);
+    }
+    synthScheduleTimerRef.current = window.setTimeout(() => {
+      synthScheduleTimerRef.current = null;
+      const engine = engineRef.current;
+      const synth = synthRef.current;
+      if (!engine || !synth) return;
+      if (engine.isPlaying) {
+        synth.schedule(engine.getCurrentTime(), engine.getTempo());
+      } else {
+        synth.cancel();
+      }
+    }, 80);
+  }, []);
+  useEffect(() => {
+    return () => {
+      if (synthScheduleTimerRef.current !== null) {
+        window.clearTimeout(synthScheduleTimerRef.current);
+        synthScheduleTimerRef.current = null;
+      }
+    };
+  }, []);
+
   const onSeek = (value: number) => {
     const engine = engineRef.current;
     if (!engine || !engine.hasBuffers) return;
     engine.seek(value);
     setPosition(engine.getCurrentTime());
-    if (engine.isPlaying) {
-      synthRef.current?.schedule(engine.getCurrentTime(), engine.getTempo());
-    } else {
-      synthRef.current?.cancel();
-    }
+    requestSynthSchedule();
   };
 
   const onTempo = (value: number) => {
     setTempo(value);
     const engine = engineRef.current;
     engine?.setTempo(value);
-    if (engine?.isPlaying) {
-      synthRef.current?.schedule(engine.getCurrentTime(), engine.getTempo());
-    }
+    if (engine?.isPlaying) requestSynthSchedule();
   };
 
   const onSetA = () => {
