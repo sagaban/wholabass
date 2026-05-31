@@ -702,7 +702,7 @@ export function Player({ songId }: PlayerProps) {
         if (!engineRef.current) {
           engineRef.current = new StemEngine(
             ctx,
-            (c) => new SoundTouchNode(c) as unknown as StretcherNode,
+            (c) => new SoundTouchNode({ context: c }) as unknown as StretcherNode,
           );
         }
         if (!synthRef.current) {
@@ -2197,7 +2197,14 @@ function LyricsPanel({
       gap="2"
       height="calc(100vh - 240px)"
     >
-      {/* oxlint-disable-next-line jsx-a11y/no-static-element-interactions */}
+      {/*
+        Draggable splitter — using role="separator" not <hr> because
+        the semantics are "resizable boundary between panels", not a
+        thematic break in document content. tabIndex={-1} keeps it
+        out of the tab order (the resize is mouse-only) while still
+        satisfying the focusable-interactive-role check.
+      */}
+      {/* oxlint-disable jsx-a11y/no-static-element-interactions, jsx-a11y/prefer-tag-over-role */}
       <Box
         onMouseDown={beginResize}
         position="absolute"
@@ -2209,9 +2216,11 @@ function LyricsPanel({
         bg="transparent"
         _hover={{ bg: "border" }}
         role="separator"
+        tabIndex={-1}
         aria-label="resize lyrics panel"
         aria-orientation="vertical"
       />
+      {/* oxlint-enable jsx-a11y/no-static-element-interactions, jsx-a11y/prefer-tag-over-role */}
       <HStack justifyContent="space-between" alignItems="center">
         <styled.div fontSize="sm" fontWeight="semibold">
           Lyrics

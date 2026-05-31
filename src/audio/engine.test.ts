@@ -135,6 +135,7 @@ class FakeAudioContext {
     this.sourcesCreated++;
     return {
       buffer: null,
+      playbackRate: makeAudioParam(1),
       connect: vi.fn(),
       disconnect: vi.fn(),
       start: vi.fn(),
@@ -144,7 +145,7 @@ class FakeAudioContext {
 }
 
 interface FakeStretcher {
-  tempo: FakeAudioParam;
+  playbackRate: FakeAudioParam;
   pitchSemitones: FakeAudioParam;
   connect: ReturnType<typeof vi.fn>;
   disconnect: ReturnType<typeof vi.fn>;
@@ -157,7 +158,7 @@ function makeStretcherFactory(): {
   const stretchers: FakeStretcher[] = [];
   const factory: StretcherFactory = () => {
     const s: FakeStretcher = {
-      tempo: makeAudioParam(1),
+      playbackRate: makeAudioParam(1),
       pitchSemitones: makeAudioParam(0),
       connect: vi.fn(),
       disconnect: vi.fn(),
@@ -377,7 +378,7 @@ describe("StemEngine.setTempo", () => {
     engine.setTempo(0.6);
     expect(engine.getTempo()).toBeCloseTo(0.6, 5);
     for (const s of stretchers) {
-      const last = s.tempo.linearRampToValueAtTime.mock.calls.at(-1)!;
+      const last = s.playbackRate.linearRampToValueAtTime.mock.calls.at(-1)!;
       expect(last[0]).toBeCloseTo(0.6, 5);
     }
 

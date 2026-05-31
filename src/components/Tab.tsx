@@ -1584,7 +1584,7 @@ function TabSystemRow({
       flexShrink="0"
       data-print-row
     >
-      {/* oxlint-disable-next-line jsx-a11y/click-events-have-key-events */}
+      {/* oxlint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-noninteractive-element-interactions */}
       <svg
         width={system.widthPx}
         height={heightPx}

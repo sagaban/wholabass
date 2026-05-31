@@ -21,10 +21,14 @@ export type StemVolumes = Record<StemName, number>;
 
 /** The minimal surface we need from a tempo-stretching worklet node. */
 export interface StretcherNode extends AudioNode {
-  readonly tempo: AudioParam;
+  /** Tells the processor what the upstream source's playbackRate is
+   *  so it can compensate the pitch shift the source's rate would
+   *  otherwise introduce. Must be set to the same value as the
+   *  source AudioBufferSourceNode's `playbackRate` AudioParam. */
+  readonly playbackRate: AudioParam;
   /** Pitch shift in semitones (0 = original). SoundTouch handles this
-   *  independently of tempo, so changing pitch alone doesn't speed the
-   *  song up or down. */
+   *  independently of playback rate, so changing pitch alone doesn't
+   *  speed the song up or down. */
   readonly pitchSemitones: AudioParam;
 }
 
@@ -133,7 +137,7 @@ export class StemEngine {
     for (const name of STEM_NAMES) {
       if (!this.stretchers[name]) {
         const s = this.stretcherFactory(this.ctx);
-        s.tempo.setValueAtTime(this.tempo, this.ctx.currentTime);
+        s.playbackRate.setValueAtTime(this.tempo, this.ctx.currentTime);
         s.pitchSemitones.setValueAtTime(this.pitchSemitones, this.ctx.currentTime);
         this.stretchers[name] = s;
       }
@@ -159,6 +163,10 @@ export class StemEngine {
     for (const name of STEM_NAMES) {
       const src = this.ctx.createBufferSource();
       src.buffer = this.buffers[name];
+      // v2 SoundTouch wants the source to do the time-stretch via its
+      // own playbackRate; the stretcher then auto-compensates pitch.
+      // Both params must stay in lockstep — setTempo ramps both.
+      src.playbackRate.setValueAtTime(this.tempo, startTime);
       src.connect(this.stretchers[name]!);
       src.start(startTime, Math.max(0, startOffset));
       this.sources[name] = src;
@@ -230,10 +238,19 @@ export class StemEngine {
     this.tempo = next;
     for (const name of STEM_NAMES) {
       const s = this.stretchers[name];
-      if (!s) continue;
-      s.tempo.cancelScheduledValues(now);
-      s.tempo.setValueAtTime(s.tempo.value, now);
-      s.tempo.linearRampToValueAtTime(next, now + RAMP_SECONDS);
+      if (s) {
+        s.playbackRate.cancelScheduledValues(now);
+        s.playbackRate.setValueAtTime(s.playbackRate.value, now);
+        s.playbackRate.linearRampToValueAtTime(next, now + RAMP_SECONDS);
+      }
+      // The source's playbackRate must match the stretcher's so the
+      // SoundTouch pitch compensation tracks correctly.
+      const src = this.sources[name];
+      if (src) {
+        src.playbackRate.cancelScheduledValues(now);
+        src.playbackRate.setValueAtTime(src.playbackRate.value, now);
+        src.playbackRate.linearRampToValueAtTime(next, now + RAMP_SECONDS);
+      }
     }
   }
 
