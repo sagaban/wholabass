@@ -1,3 +1,5 @@
+import { log } from "@/diag/logger";
+
 // Drummer-style count-in: schedule a handful of short clicks at the
 // local beat interval, then call `onComplete` so the caller can start
 // playback in lock-step with the next downbeat. The clicks are routed
@@ -30,6 +32,9 @@ export interface CountInHandle {
 export function startCountIn(opts: CountInOptions): CountInHandle {
   const { ctx, beats, fallbackBpm, count, atSec, onComplete } = opts;
   const interval = localBeatInterval(beats, atSec) ?? 60 / Math.max(1, fallbackBpm);
+  log.debug(
+    `countIn.start · beats=${count} interval=${interval.toFixed(3)}s @ ${atSec.toFixed(3)}s (beats.length=${beats.length})`,
+  );
 
   // Small lookahead so the first oscillator's `start(when)` lands in
   // the future — required for sample-accurate scheduling.
@@ -64,6 +69,7 @@ export function startCountIn(opts: CountInOptions): CountInHandle {
   return {
     cancel: () => {
       cancelled = true;
+      log.debug("countIn.cancel");
       clearTimeout(timer);
       for (const o of oscillators) {
         try {

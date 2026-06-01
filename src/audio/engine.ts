@@ -11,6 +11,8 @@
  * a real AudioWorkletNode.
  */
 
+import { log } from "@/diag/logger";
+
 export type StemName = "vocals" | "drums" | "bass" | "other";
 
 export const STEM_NAMES: readonly StemName[] = ["vocals", "drums", "bass", "other"] as const;
@@ -123,6 +125,7 @@ export class StemEngine {
   }
 
   load(buffers: StemBuffers): void {
+    log.info(`engine.load · duration=${buffers.vocals.duration.toFixed(2)}s`);
     this.stopSources();
     this.buffers = buffers;
     this.state = { kind: "stopped" };
@@ -156,8 +159,14 @@ export class StemEngine {
   }
 
   play(offset?: number): void {
-    if (!this.buffers) return;
+    if (!this.buffers) {
+      log.warn("engine.play · no buffers loaded");
+      return;
+    }
     const startOffset = offset ?? (this.state.kind === "paused" ? this.state.offset : 0);
+    log.info(
+      `engine.play · offset=${startOffset.toFixed(3)}s rate=${this.tempo.toFixed(3)} pitch=${this.pitchSemitones}st state=${this.state.kind}`,
+    );
     this.stopSources();
     const startTime = this.ctx.currentTime;
     for (const name of STEM_NAMES) {
@@ -181,12 +190,14 @@ export class StemEngine {
   pause(): void {
     if (this.state.kind !== "playing") return;
     const offset = currentAudioPos(this.state, this.ctx.currentTime, this.tempo, this.duration);
+    log.info(`engine.pause · at=${offset.toFixed(3)}s`);
     this.stopSources();
     this.state = { kind: "paused", offset };
   }
 
   seek(offset: number): void {
     const target = clamp(offset, 0, this.duration);
+    log.debug(`engine.seek · to=${target.toFixed(3)}s while=${this.state.kind}`);
     if (this.state.kind === "playing") {
       this.play(target);
     } else {
@@ -227,6 +238,7 @@ export class StemEngine {
   setTempo(value: number): void {
     const next = clamp(value, TEMPO_MIN, TEMPO_MAX);
     const now = this.ctx.currentTime;
+    log.debug(`engine.setTempo · ${this.tempo.toFixed(3)} → ${next.toFixed(3)}`);
     if (this.state.kind === "playing") {
       const audioPos = currentAudioPos(this.state, now, this.tempo, this.duration);
       this.state = {
@@ -264,6 +276,7 @@ export class StemEngine {
   setPitchSemitones(semitones: number): void {
     const next = clamp(semitones, -12, 12);
     if (next === this.pitchSemitones) return;
+    log.debug(`engine.setPitchSemitones · ${this.pitchSemitones} → ${next}st`);
     this.pitchSemitones = next;
     const now = this.ctx.currentTime;
     for (const name of STEM_NAMES) {

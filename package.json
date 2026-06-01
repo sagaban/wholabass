@@ -23,6 +23,7 @@
     "@soundtouchjs/audio-worklet": "^2.0.3",
     "@tanstack/react-router": "^1.170.10",
     "@tauri-apps/api": "^2.11.0",
+    "@tauri-apps/plugin-log": "^2.8.0",
     "@tonejs/midi": "^2.0.28",
     "lucide-react": "^1.17.0",
     "react": "^19.2.6",

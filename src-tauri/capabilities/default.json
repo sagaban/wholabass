@@ -8,6 +8,7 @@
     "core:webview:allow-print",
     "shell:default",
     "dialog:default",
+    "log:default",
     {
       "identifier": "shell:allow-execute",
       "allow": [

@@ -30,6 +30,7 @@ import {
 } from "@/audio/midi";
 import { startCountIn, type CountInHandle } from "@/audio/click-track";
 import { MidiSynth } from "@/audio/midi-synth";
+import { log } from "@/diag/logger";
 import { importSongsterrBass } from "@/audio/songsterr";
 import { StemMixer } from "@/components/StemMixer";
 import { PianoRoll } from "@/components/PianoRoll";
@@ -691,13 +692,16 @@ export function Player({ songId }: PlayerProps) {
 
     void (async () => {
       try {
+        log.info(`player.load · songId=${songId}`);
         if (!ctxRef.current) {
           ctxRef.current = new AudioContext();
+          log.info(`AudioContext created · sr=${ctxRef.current.sampleRate}`);
         }
         const ctx = ctxRef.current;
         // Idempotent: addModule on the same URL is a no-op for subsequent
         // engine instances on the same context.
         await SoundTouchNode.register(ctx, processorUrl);
+        log.info(`SoundTouchNode.register · ok (state=${ctx.state})`);
 
         if (!engineRef.current) {
           engineRef.current = new StemEngine(
@@ -717,6 +721,7 @@ export function Player({ songId }: PlayerProps) {
         setDuration(engine.duration);
         setLoad({ kind: "ready" });
       } catch (err: unknown) {
+        log.error(`player.load failed · songId=${songId} · ${String(err)}`);
         if (!cancelled) {
           setLoad({ kind: "error", message: String(err) });
         }

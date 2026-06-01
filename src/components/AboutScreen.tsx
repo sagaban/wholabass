@@ -1,7 +1,9 @@
+import { useState } from "react";
 import { useNavigate } from "@tanstack/react-router";
 import { Box, HStack, styled, VStack } from "styled-system/jsx";
 import { Button } from "@/components/ui";
 import { ThemeToggle } from "@/components/ThemeToggle";
+import { recentLogsAsText } from "@/diag/logger";
 
 interface Credit {
   name: string;
@@ -154,9 +156,61 @@ export function AboutScreen() {
         ))}
       </VStack>
 
+      <DiagnosticsBlock />
+
       <styled.p mt="8" fontSize="sm" opacity="0.6">
         Missing a credit? Open an issue at the project's repo.
       </styled.p>
+    </Box>
+  );
+}
+
+function DiagnosticsBlock() {
+  const [status, setStatus] = useState<string | null>(null);
+
+  const onCopy = async () => {
+    const text = [
+      `wholabass diagnostics @ ${new Date().toISOString()}`,
+      `userAgent: ${navigator.userAgent}`,
+      `platform: ${navigator.platform}`,
+      "",
+      "── recent log (in-memory tail) ──",
+      recentLogsAsText() || "(empty)",
+      "",
+      "── persistent log file ──",
+      "macOS: ~/Library/Logs/com.santiagobandiera.wholabass/wholabass.log",
+    ].join("\n");
+    try {
+      await navigator.clipboard.writeText(text);
+      setStatus("copied to clipboard");
+    } catch {
+      setStatus("clipboard unavailable");
+    }
+  };
+
+  return (
+    <Box mt="8" pt="6" borderTopWidth="1px" borderColor="border.default">
+      <styled.h2 m="0" mb="2" fontSize="lg" fontWeight="semibold">
+        Diagnostics
+      </styled.h2>
+      <styled.p mt="0" mb="3" fontSize="sm" opacity="0.7">
+        If the app crashed or behaved unexpectedly, the persistent log is at{" "}
+        <styled.code fontSize="xs">
+          ~/Library/Logs/com.santiagobandiera.wholabass/wholabass.log
+        </styled.code>
+        . The button below copies the last few hundred in-memory entries plus that path to the
+        clipboard.
+      </styled.p>
+      <HStack gap="3" alignItems="center">
+        <Button size="sm" variant="outline" onClick={() => void onCopy()}>
+          Copy diagnostics
+        </Button>
+        {status && (
+          <styled.span fontSize="sm" opacity="0.7">
+            {status}
+          </styled.span>
+        )}
+      </HStack>
     </Box>
   );
 }

@@ -12,6 +12,7 @@
  */
 
 import type { Articulation, BassNote } from "@/audio/midi";
+import { log } from "@/diag/logger";
 
 export interface ScheduledEvent {
   pitch: number;
@@ -190,6 +191,7 @@ export class MidiSynth {
    * play/seek/tempo-change/loop-jump callbacks.
    */
   schedule(songOffset: number, tempo: number, songEnd?: number): void {
+    const wasActive = this.active.length;
     this.cancel();
     const events = notesToSchedule(this.notes, {
       songOffset,
@@ -200,6 +202,9 @@ export class MidiSynth {
     for (const evt of events) {
       this.spawn(evt);
     }
+    log.debug(
+      `synth.schedule · songOffset=${songOffset.toFixed(3)} tempo=${tempo.toFixed(2)} events=${events.length} (cancelled ${wasActive})`,
+    );
   }
 
   cancel(): void {

@@ -730,6 +730,29 @@ fn parse_separate_response(
 
 pub fn run() {
     tauri::Builder::default()
+        .plugin(
+            // Mirror to stdout AND a rolling file in the OS log dir
+            // (macOS: ~/Library/Logs/com.santiagobandiera.wholabass/).
+            // Frontend `info/warn/error` calls bridge to here via the
+            // JS plugin, so anything we log on either side survives a
+            // WebView crash.
+            tauri_plugin_log::Builder::default()
+                .targets([
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Stdout),
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::LogDir {
+                        file_name: Some("wholabass".to_string()),
+                    }),
+                    tauri_plugin_log::Target::new(tauri_plugin_log::TargetKind::Webview),
+                ])
+                .level(if cfg!(debug_assertions) {
+                    log::LevelFilter::Debug
+                } else {
+                    log::LevelFilter::Info
+                })
+                .max_file_size(10 * 1024 * 1024)
+                .rotation_strategy(tauri_plugin_log::RotationStrategy::KeepAll)
+                .build(),
+        )
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(AppState {
