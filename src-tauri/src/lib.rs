@@ -762,13 +762,18 @@ pub fn run() {
         .setup(|app| {
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
+                log::info!("sidecar: spawn task starting");
                 match Sidecar::spawn(&handle).await {
                     Ok(sc) => {
                         let state = handle.state::<AppState>();
                         *state.sidecar.lock().await = Some(Arc::new(sc));
+                        log::info!("sidecar: spawn task ready");
                     }
                     Err(e) => {
-                        eprintln!("failed to spawn sidecar: {e:#}");
+                        // Goes to the rolling log file via tauri-plugin-log,
+                        // not just stderr — so a built-app crash leaves a
+                        // trail the user can show us.
+                        log::error!("sidecar: failed to spawn: {e:#}");
                     }
                 }
             });

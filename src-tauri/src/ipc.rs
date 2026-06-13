@@ -24,33 +24,66 @@ struct Inner {
 }
 
 impl Sidecar {
-    /// Spawn the sidecar, preferring `uv run python server.py` when we
-    /// can see the dev checkout (a sibling `ml/server.py` resolvable
-    /// from `CARGO_MANIFEST_DIR`) and falling back to the bundled
-    /// PyInstaller binary otherwise.
+    /// Spawn the sidecar. Strategy:
     ///
-    /// Dev gets priority because Tauri 2 copies externalBin entries
-    /// into `target/debug/` for `cargo run` / `pnpm tauri dev` — so
-    /// the bundled binary IS present next to the dev exe, and
-    /// preferring it would mean re-running the 1-2 minute PyInstaller
-    /// build on every Python edit. The bundled path remains the
-    /// fallback for the packaged `.app` where `ml/server.py` isn't
-    /// reachable.
+    /// - **Debug builds (`cargo run` / `pnpm tauri dev`)**: prefer
+    ///   `uv run python server.py` against the dev checkout, so a
+    ///   Python edit doesn't require a 1–2 minute PyInstaller rebuild.
+    ///   Bundled is a fallback for when `uv` isn't on PATH.
+    /// - **Release builds (`pnpm tauri build`)**: prefer the bundled
+    ///   PyInstaller binary. The `option_env!("CARGO_MANIFEST_DIR")`
+    ///   path is baked into the binary at compile time, so on the
+    ///   *developer's* machine that path still resolves and the dev
+    ///   branch would otherwise win — but a `.app` launched from
+    ///   Finder has a restricted PATH that doesn't include `uv`
+    ///   (homebrew paths are stripped), so spawning `uv` errors and
+    ///   the user gets "sidecar not started" 5 seconds later.
+    ///   Gating on `cfg!(debug_assertions)` keeps the release path
+    ///   bundle-first regardless of where the binary lives.
     ///
     /// In the bundled path we also export `FFMPEG_LOCATION` so the
     /// sibling static `ffmpeg` binary picked up by yt-dlp works
     /// without a system install.
     pub async fn spawn(app: &tauri::AppHandle) -> Result<Self> {
-        if let Ok(project_root) = locate_project_root() {
-            let ml_dir = project_root.join("ml");
-            if ml_dir.join("server.py").exists() {
-                return Self::spawn_in_dir(&ml_dir).await;
+        if cfg!(debug_assertions) {
+            // Dev: uv first, bundled as last-resort fallback.
+            if let Ok(project_root) = locate_project_root() {
+                let ml_dir = project_root.join("ml");
+                if ml_dir.join("server.py").exists() {
+                    log::info!("sidecar: spawning via `uv run` at {}", ml_dir.display());
+                    return Self::spawn_in_dir(&ml_dir).await;
+                }
+            }
+            if let Some(packaged) = locate_bundled_sidecar(app) {
+                log::info!(
+                    "sidecar: dev project root not found, falling back to bundled at {}",
+                    packaged.binary.display()
+                );
+                return Self::spawn_bundled(&packaged.binary, packaged.ffmpeg.as_deref()).await;
+            }
+        } else {
+            // Release: bundled first, uv as last-resort (only fires
+            // if someone wired their own server.py into a packaged
+            // build — useful for power users, not the normal path).
+            if let Some(packaged) = locate_bundled_sidecar(app) {
+                log::info!(
+                    "sidecar: spawning bundled binary at {}",
+                    packaged.binary.display()
+                );
+                return Self::spawn_bundled(&packaged.binary, packaged.ffmpeg.as_deref()).await;
+            }
+            if let Ok(project_root) = locate_project_root() {
+                let ml_dir = project_root.join("ml");
+                if ml_dir.join("server.py").exists() {
+                    log::warn!(
+                        "sidecar: bundled binary missing in release build; falling back to `uv run` at {}",
+                        ml_dir.display()
+                    );
+                    return Self::spawn_in_dir(&ml_dir).await;
+                }
             }
         }
-        if let Some(packaged) = locate_bundled_sidecar(app) {
-            return Self::spawn_bundled(&packaged.binary, packaged.ffmpeg.as_deref()).await;
-        }
-        bail!("no sidecar found: ml/server.py missing and no bundled wholabass-server next to the executable");
+        bail!("no sidecar found: bundled wholabass-server missing next to the executable and ml/server.py unreachable");
     }
 
     /// Direct-spawn the bundled binary (no `uv` involvement). Used in
