@@ -173,6 +173,11 @@ async fn transcribe_song(
     )
     .await
     .map_err(|e| format!("transcribe: {e}"))?;
+    // A fresh transcription supersedes any previous Songsterr-import
+    // fingerings — without this clear, the Tab loader still prefers
+    // the stale bass.tab.json over the new bass.mid and the user sees
+    // their old notes despite the audio side having changed.
+    clear_bass_tab_file(&library_root, &song_id).await?;
     Ok(())
 }
 
@@ -494,7 +499,13 @@ async fn replace_bass_midi(
     let path = library::midi_path(&library_root, &song_id);
     tokio::fs::write(&path, bytes)
         .await
-        .map_err(|e| format!("write {}: {e}", path.display()))
+        .map_err(|e| format!("write {}: {e}", path.display()))?;
+    // Drop any stale explicit-fingering tab so a user-uploaded MIDI
+    // doesn't render with the previous source's string/fret choices.
+    // The Songsterr import flow calls `write_bass_tab` *after* this
+    // command, so its fingerings still land — the delete-then-rewrite
+    // sequence is intentional and ordered.
+    clear_bass_tab_file(&library_root, &song_id).await
 }
 
 /// Detect when the bass stem first plays. Used by the auto-match
@@ -674,7 +685,16 @@ async fn write_bass_tab(song_id: String, tab: Value, app: AppHandle) -> Result<(
 #[tauri::command]
 async fn clear_bass_tab(song_id: String, app: AppHandle) -> Result<(), String> {
     let library_root = library::resolve_root(&app).map_err(|e| e.to_string())?;
-    let path = library::tab_path(&library_root, &song_id);
+    clear_bass_tab_file(&library_root, &song_id).await
+}
+
+/// In-process helper used by `transcribe_song` and `replace_bass_midi` to
+/// invalidate the explicit-fingering tab JSON whenever a fresh bass.mid
+/// is written — without it the Tab loader would keep showing the
+/// previous source's (e.g. Songsterr's) notes even though the underlying
+/// MIDI changed underneath. NotFound is treated as success.
+async fn clear_bass_tab_file(library_root: &std::path::Path, song_id: &str) -> Result<(), String> {
+    let path = library::tab_path(library_root, song_id);
     match tokio::fs::remove_file(&path).await {
         Ok(()) => Ok(()),
         Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
