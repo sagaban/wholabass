@@ -12,21 +12,21 @@ import "@fontsource/victor-mono/400-italic.css";
 import "./styles/global.css";
 import { ensureBravuraLoaded } from "./audio/smufl-font";
 
-// Apply the stored color mode before first paint to avoid a flash.
-applyMode(readStoredMode());
-ensureBravuraLoaded();
-
-log.info(`app boot · ua=${navigator.userAgent}`);
-
-// Capture any uncaught JS error / unhandled promise so the next crash
-// leaves something behind in the rolling log. The Rust-side rolling
-// file persists across WebView reloads — that's the point.
+// Wire global error capture FIRST so any throw from boot init or the
+// boot breadcrumb itself reaches the log file. If the logger is the
+// broken thing, the inner try/catch falls back to console.error in
+// the WebView devtools — so a blank window can never be "no signal
+// anywhere", only "check devtools instead of the log file".
 window.addEventListener("error", (e) => {
   const stack = e.error instanceof Error ? e.error.stack : undefined;
-  log.error(
-    `window.error: ${e.message} @ ${e.filename}:${e.lineno}:${e.colno}` +
-      (stack ? `\n${stack}` : ""),
-  );
+  try {
+    log.error(
+      `window.error: ${e.message} @ ${e.filename}:${e.lineno}:${e.colno}` +
+        (stack ? `\n${stack}` : ""),
+    );
+  } catch {
+    console.error("window.error (logger failed):", e);
+  }
 });
 window.addEventListener("unhandledrejection", (e) => {
   const reason = e.reason;
@@ -36,8 +36,33 @@ window.addEventListener("unhandledrejection", (e) => {
       : typeof reason === "string"
         ? reason
         : JSON.stringify(reason);
-  log.error(`unhandledrejection: ${msg}`);
+  try {
+    log.error(`unhandledrejection: ${msg}`);
+  } catch {
+    console.error("unhandledrejection (logger failed):", reason);
+  }
 });
+
+// Apply the stored color mode before first paint to avoid a flash.
+// Boot-time setup is wrapped so a localStorage failure or font-load
+// throw can never block the render — better to ship with default
+// theme than a blank window.
+try {
+  applyMode(readStoredMode());
+} catch (e) {
+  console.error("applyMode failed:", e);
+}
+try {
+  ensureBravuraLoaded();
+} catch (e) {
+  console.error("ensureBravuraLoaded failed:", e);
+}
+
+try {
+  log.info(`app boot · ua=${navigator.userAgent}`);
+} catch (e) {
+  console.error("boot log failed:", e);
+}
 
 // Print → temporarily strip the `.dark` class so the document renders
 // in light-theme tokens (white canvas, dark text, light section bands).

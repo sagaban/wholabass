@@ -35,11 +35,18 @@ function pushRing(level: Level, msg: string) {
 // latency for no gain.
 function fire(level: Level, msg: string, fn: (m: string) => Promise<void>): void {
   pushRing(level, msg);
-  fn(msg).catch(() => {
-    // Plugin channel is the only thing that could throw here. If it
-    // does, the in-memory ring still has the entry for the
-    // diagnostics dump, and the WebView console mirror will show it.
-  });
+  // try/catch covers the synchronous path (e.g. plugin import failed
+  // and `fn` is undefined), .catch covers the async one (plugin
+  // channel down). Either way the in-memory ring still has the
+  // entry, and we mirror to console as a last resort so a logger
+  // failure can never block render or hide an upstream error.
+  try {
+    fn(msg).catch((err) => {
+      console.error(`[${level}] logger send failed:`, err, "msg:", msg);
+    });
+  } catch (err) {
+    console.error(`[${level}] logger threw:`, err, "msg:", msg);
+  }
 }
 
 export const log = {
