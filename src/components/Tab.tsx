@@ -91,7 +91,15 @@ function normaliseTabToStandardTuning(notes: readonly TabNote[]): TabNote[] {
     if (n.pitch === DEFAULT_TUNING[n.string] + n.fret) return n;
     const placements = enumeratePlacements(n.pitch, DEFAULT_TUNING);
     if (placements.length > 0) {
-      return { ...n, string: placements[0].string, fret: placements[0].fret };
+      // Pick the placement closest to the original fret — the source
+      // tab's fret is a hint about hand position, so keep the new
+      // placement near it. Ties broken by preferring the lower fret.
+      const best = placements.toSorted((a, b) => {
+        const da = Math.abs(a.fret - n.fret);
+        const db = Math.abs(b.fret - n.fret);
+        return da - db || a.fret - b.fret;
+      })[0];
+      return { ...n, string: best.string, fret: best.fret };
     }
     return { ...n, string: 0, fret: 0 };
   });

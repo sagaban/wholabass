@@ -155,11 +155,22 @@ function scoreToBassTab(score: alphaTab.model.Score, midiBytes: Uint8Array): Bas
     for (const voice of bar.voices) {
       for (const beat of voice.beats) {
         if (beat.isRest || beat.isEmpty) continue;
-        for (const note of beat.notes) {
-          // Skip notes that don't generate NoteOn (tied destinations are
-          // continuations of the previous note; dead are technically a
-          // muted thump but our synth doesn't render them).
-          if (note.isTieDestination || note.isDead) continue;
+        // Sort within-beat notes by ascending pitch BEFORE pushing so
+        // the global order matches midiNotes' `(startSec, pitch)` sort
+        // below. Without this the alphaTab `beat.notes` iteration
+        // returns chord notes in some non-pitch order (often string-
+        // descending), and the index-paired join further down mates
+        // each pitch with the WRONG (string, fret) — manifesting as a
+        // 3-note chord whose outer notes get their fingerings swapped
+        // while the middle one happens to look right. We don't have
+        // absolute start times on `ScoreNote`, but a strict bar →
+        // voice → beat traversal is monotonically non-decreasing in
+        // time, so within-beat sort by pitch is sufficient as long as
+        // the import is single-voice (the common case for bass).
+        const playedNotes = beat.notes
+          .filter((n) => !n.isTieDestination && !n.isDead)
+          .toSorted((a, b) => a.realValue - b.realValue);
+        for (const note of playedNotes) {
           scoreNotes.push({
             // alphaTab string is 1-indexed with 1 = lowest pitch. Wholabass
             // uses 0-indexed with 0 = lowest pitch.
@@ -188,11 +199,20 @@ function scoreToBassTab(score: alphaTab.model.Score, midiBytes: Uint8Array): Bas
     if (s.pitch === DEFAULT_TUNING[s.string] + s.fret) continue;
     const placements = enumeratePlacements(s.pitch, DEFAULT_TUNING);
     if (placements.length > 0) {
-      // Prefer the lowest-string placement — keeps hand position close
-      // to where the original tab implied (lowest = bass-y, in the
-      // common case of imports from low-tuned basses).
-      s.string = placements[0].string;
-      s.fret = placements[0].fret;
+      // Pick the placement closest to the ORIGINAL fret — the source
+      // tab's fret number is a hint about the hand position the
+      // arranger intended, so keep the new placement near it. Ties
+      // broken by preferring the lower fret (closer to first
+      // position, easier for sight-reading). The old logic preferred
+      // "lowest string" which sent C3 to E-string fret 20 instead of
+      // the obvious D-string fret 10 — visually unplayable.
+      const best = placements.toSorted((a, b) => {
+        const da = Math.abs(a.fret - s.fret);
+        const db = Math.abs(b.fret - s.fret);
+        return da - db || a.fret - b.fret;
+      })[0];
+      s.string = best.string;
+      s.fret = best.fret;
       normalised++;
     } else {
       // Pitch is below `DEFAULT_TUNING[0]` (E1) — off the standard
